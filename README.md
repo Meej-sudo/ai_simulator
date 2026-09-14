@@ -5,6 +5,7 @@ A modular-monolith proof of concept for organizational cyber-incident exercises.
 ## What is implemented
 
 - YAML scenario compiler with strict Pydantic validation and cross-reference checks
+- Browser-based form editor that abstracts and validates all six YAML scenario files
 - Deterministic variant materialization with ground truth kept out of public API and LLM requests
 - Logical simulation clock and interval-based timeline processing
 - PostgreSQL/SQLAlchemy session state plus an append-only audit event log
@@ -103,6 +104,10 @@ DATABASE_URL=postgresql+psycopg://trainer:trainer@localhost:5432/trainer alembic
 GET  /health
 GET  /scenarios
 GET  /scenarios/{id}
+GET  /scenarios/{id}/authoring
+PUT  /scenarios/{id}/authoring
+GET  /scenarios/{id}/sources
+PUT  /scenarios/{id}/sources
 
 POST /sessions
 GET  /sessions/{id}
@@ -155,6 +160,23 @@ curl -X POST http://localhost:8000/sessions/SESSION_ID/advance-time \
 
 ## Authoring scenarios
 
+Before starting an exercise, select a scenario and open **Edit scenario** from the
+setup screen. The editor presents guided forms for the overview, roles, facts,
+timeline, variants, and scoring rules; users do not need to understand YAML. It
+also updates references when IDs are renamed and uses constrained controls for
+roles, facts, events, categories, confidence values, and scoring rule types.
+
+The structured document is saved through the authoring API and rendered back to
+the six YAML files. The backend compiles a staged copy first; invalid values,
+renamed scenario IDs, or broken cross-references return a validation error without
+changing the live files. Successful changes are reloaded immediately for new
+exercises. The lower-level source API remains available for advanced integrations.
+
+The editor exposes scenario ground truth and this POC does not yet provide user
+authentication or author/trainee permissions. Deploy the authoring surface only on
+a trusted network until access control is added, and do not edit a scenario while
+another user is actively running it.
+
 Each scenario directory contains:
 
 ```text
@@ -175,4 +197,6 @@ cd backend
 ../.venv/bin/pytest -q
 ```
 
-The suite covers compiler failures, deterministic variant resolution, logical time boundaries, knowledge isolation and transfer, evaluation, and the LLM boundary retry/fallback behavior.
+The suite covers compiler failures, validated/rollback-safe source editing,
+deterministic variant resolution, logical time boundaries, knowledge isolation and
+transfer, evaluation, and the LLM boundary retry/fallback behavior.

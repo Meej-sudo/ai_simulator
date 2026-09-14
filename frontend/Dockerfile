@@ -1,7 +1,7 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY frontend/package.json ./
-RUN npm install
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 COPY frontend/ ./
 ARG NEXT_PUBLIC_API_URL=/api
 ARG INTERNAL_API_URL=http://backend:8000

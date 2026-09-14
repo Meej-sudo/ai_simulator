@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.domain.evaluation.engine import EvaluationResult
+from app.domain.scenarios.compiler import ScenarioValidationError
 from app.llm.errors import LLMProviderError
 from app.schemas.api import (
     ActionAcceptedResponse,
@@ -16,7 +17,11 @@ from app.schemas.api import (
     FactResponse,
     KnowledgeResponse,
     RoleResponse,
+    ScenarioAuthoringResponse,
+    ScenarioAuthoringUpdateRequest,
     ScenarioDetailResponse,
+    ScenarioSourcesResponse,
+    ScenarioSourcesUpdateRequest,
     ScenarioSummaryResponse,
     SessionResponse,
     ShareFactRequest,
@@ -102,6 +107,85 @@ def get_scenario(scenario_id: str, request: Request):
             for role in compiled.roles
         ],
     )
+
+
+def scenario_sources_response(
+    request: Request, scenario_id: str
+) -> ScenarioSourcesResponse:
+    registry = request.app.state.scenarios
+    try:
+        compiled = registry.get(scenario_id)
+        files = registry.source_files(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ScenarioSourcesResponse(
+        scenario=scenario_summary(compiled),
+        files=files,
+    )
+
+
+@router.get(
+    "/scenarios/{scenario_id}/authoring",
+    response_model=ScenarioAuthoringResponse,
+)
+def get_scenario_authoring(scenario_id: str, request: Request):
+    try:
+        compiled = request.app.state.scenarios.get(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ScenarioAuthoringResponse(
+        scenario=scenario_summary(compiled),
+        document=compiled,
+    )
+
+
+@router.put(
+    "/scenarios/{scenario_id}/authoring",
+    response_model=ScenarioAuthoringResponse,
+)
+def update_scenario_authoring(
+    scenario_id: str,
+    body: ScenarioAuthoringUpdateRequest,
+    request: Request,
+):
+    try:
+        compiled = request.app.state.scenarios.update_document(
+            scenario_id, body.document
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ScenarioValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ScenarioAuthoringResponse(
+        scenario=scenario_summary(compiled),
+        document=compiled,
+    )
+
+
+@router.get(
+    "/scenarios/{scenario_id}/sources",
+    response_model=ScenarioSourcesResponse,
+)
+def get_scenario_sources(scenario_id: str, request: Request):
+    return scenario_sources_response(request, scenario_id)
+
+
+@router.put(
+    "/scenarios/{scenario_id}/sources",
+    response_model=ScenarioSourcesResponse,
+)
+def update_scenario_sources(
+    scenario_id: str,
+    body: ScenarioSourcesUpdateRequest,
+    request: Request,
+):
+    try:
+        request.app.state.scenarios.update_source_files(scenario_id, body.files)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ScenarioValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return scenario_sources_response(request, scenario_id)
 
 
 @router.post("/sessions", response_model=SessionResponse, status_code=201)

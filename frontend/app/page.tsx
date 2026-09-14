@@ -2,6 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import ScenarioEditor from "./ScenarioEditor";
+import { api } from "./api";
+
 type Variant = { id: string; name: string };
 type DecisionCategory = {
   id: string;
@@ -44,20 +47,6 @@ type CompletedExercise = {
   totalScore: number;
   possibleScore: number;
 };
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "/api";
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail ?? "Request failed");
-  }
-  return response.json();
-}
 
 export default function Home() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -227,6 +216,18 @@ export default function Home() {
     });
   }
 
+  function handleScenarioSaved(updated: Scenario) {
+    setScenarios((current) => current.map(
+      (item) => item.id === updated.id ? updated : item,
+    ));
+    if (!updated.variants.some((item) => item.id === variantId)) {
+      setVariantId(updated.variants[0]?.id ?? "");
+    }
+    if (!updated.decision_categories.some((item) => item.id === decisionCategory)) {
+      setDecisionCategory(updated.decision_categories[0]?.id ?? "");
+    }
+  }
+
   function decide(event: FormEvent) {
     event.preventDefault();
     return run(async () => {
@@ -307,6 +308,9 @@ export default function Home() {
             </select>
           </label>
           <button disabled={busy || !variantId} onClick={createSession}>Start exercise</button>
+          {scenarioId && (
+            <ScenarioEditor scenarioId={scenarioId} onSaved={handleScenarioSaved} />
+          )}
         </section>
       ) : (
         <div className="grid">

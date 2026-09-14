@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.scenarios.models import CommunicationStyle, Confidence
+from app.domain.scenarios.models import CommunicationStyle, CompiledScenario, Confidence
 from app.domain.simulation.models import EventType, SessionStatus
 from app.llm.models import ResponseCertainty
 
@@ -103,6 +103,31 @@ class ScenarioSummaryResponse(BaseModel):
 
 class ScenarioDetailResponse(ScenarioSummaryResponse):
     roles: list[RoleResponse]
+
+
+class ScenarioSourcesUpdateRequest(BaseModel):
+    files: dict[str, str] = Field(min_length=6, max_length=6)
+
+    @field_validator("files")
+    @classmethod
+    def reject_oversized_request(cls, files: dict[str, str]) -> dict[str, str]:
+        if sum(len(content.encode("utf-8")) for content in files.values()) > 2_000_000:
+            raise ValueError("scenario source payload exceeds the 2000000-byte limit")
+        return files
+
+
+class ScenarioSourcesResponse(BaseModel):
+    scenario: ScenarioSummaryResponse
+    files: dict[str, str]
+
+
+class ScenarioAuthoringUpdateRequest(BaseModel):
+    document: CompiledScenario
+
+
+class ScenarioAuthoringResponse(BaseModel):
+    scenario: ScenarioSummaryResponse
+    document: CompiledScenario
 
 
 class EventResponse(BaseModel):
