@@ -1,0 +1,35 @@
+facts:
+  - id: F001
+    type: observation
+    statement: Multiple failed logins were observed for an administrative account.
+    confidence: confirmed
+
+  - id: F002
+    type: assessment
+    statement: The administrative account may be compromised.
+    confidence: medium
+
+  - id: F003
+    type: assessment
+    statement: Data exfiltration may have occurred.
+    confidence: medium
+
+  - id: F004
+    type: observation
+    statement: An unusual volume of outbound traffic was observed from an affected server.
+    confidence: high
+
+  - id: F005
+    type: observation
+    statement: Ransomware encryption is active on several file servers.
+    confidence: confirmed
+
+  - id: F006
+    type: observation
+    statement: The outbound connection overlaps with an approved backup-provider endpoint.
+    confidence: medium
+
+  - id: F008
+    type: assessment
+    statement: Forensic evidence confirms that protected data left the network.
+    confidence: confirmed

@@ -216,3 +216,39 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific local configuration and secrets
+.env.*
+!.env.example
+secrets/
+
+# Additional Python tooling
+.pyright/
+
+# Runtime databases
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-journal
+
+# Node and Next.js output
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local Docker overrides
+docker-compose.override.yml
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

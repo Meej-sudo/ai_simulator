@@ -1,0 +1,33 @@
+variants:
+  - id: track_alpha
+    name: Track Alpha
+    ground_truth:
+      ransomware_intrusion: true
+      data_exfiltration: true
+      outbound_traffic_cause: attacker_transfer
+    fact_overrides: []
+    timeline_overrides:
+      - event_id: E006
+        enabled: false
+
+  - id: track_bravo
+    name: Track Bravo
+    ground_truth:
+      ransomware_intrusion: true
+      data_exfiltration: false
+      outbound_traffic_cause: approved_backup
+    fact_overrides:
+      - fact_id: F003
+        statement: The outbound traffic creates a preliminary concern about possible data exfiltration.
+        confidence: low
+      - fact_id: F004
+        statement: Outbound traffic was observed from an affected server, but its destination is not yet classified.
+        confidence: medium
+      - fact_id: F006
+        statement: The outbound traffic is confirmed to be an approved backup transfer.
+        confidence: confirmed
+    timeline_overrides:
+      - event_id: E006
+        at_minute: 55
+      - event_id: E007
+        enabled: false

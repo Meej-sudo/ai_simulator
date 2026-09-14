@@ -1,0 +1,40 @@
+roles:
+  - id: soc
+    display_name: SOC Analyst
+    responsibilities:
+      - investigate technical indicators
+      - communicate technical findings and uncertainty
+    communication_style:
+      tone: technical and concise
+      verbosity: medium
+    response_guidance: Distinguish observations from assessments and identify investigation gaps.
+
+  - id: ciso
+    display_name: Chief Information Security Officer
+    responsibilities:
+      - coordinate incident response
+      - escalate material risk to leadership
+      - make containment recommendations
+    communication_style:
+      tone: risk-focused and decisive
+      verbosity: medium
+
+  - id: dpo
+    display_name: Data Protection Officer
+    responsibilities:
+      - assess potential personal-data exposure
+      - advise on notification obligations
+    communication_style:
+      tone: precise and compliance-focused
+      verbosity: medium
+    response_guidance: Do not treat suspected exposure as a confirmed breach.
+
+  - id: ceo
+    display_name: Chief Executive Officer
+    responsibilities:
+      - set business priorities
+      - approve major operational tradeoffs
+      - oversee external stakeholder communication
+    communication_style:
+      tone: strategic and direct
+      verbosity: low

@@ -1,0 +1,16 @@
+scenario:
+  id: ransomware_001
+  name: Ransomware with suspected data exfiltration
+  description: Coordinate investigation, escalation, privacy response, and executive decisions under uncertainty.
+  duration_minutes: 180
+  decision_categories:
+    - id: containment
+      display_name: Containment
+      description: Decisions that limit spread or isolate affected systems.
+    - id: exfiltration
+      display_name: Exfiltration
+      description: Decisions and conclusions about possible data loss.
+      captures_confidence: true
+    - id: notification
+      display_name: Notification
+      description: Decisions about internal, regulatory, or external notification.

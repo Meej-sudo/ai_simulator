@@ -1,0 +1,33 @@
+rules:
+  - id: involve_dpo
+    description: Involve the DPO promptly when possible data exfiltration becomes known.
+    type: role_contacted_within
+    trigger_fact: F003
+    target_role: dpo
+    within_minutes: 30
+    points: 20
+
+  - id: share_exfiltration_assessment
+    description: Share the exfiltration assessment with the DPO.
+    type: fact_shared_within
+    trigger_fact: F003
+    fact_id: F003
+    target_role: dpo
+    within_minutes: 30
+    points: 20
+
+  - id: timely_containment_decision
+    description: Make an explicit containment decision after ransomware is identified.
+    type: decision_within
+    trigger_fact: F005
+    decision_category: containment
+    within_minutes: 25
+    points: 30
+
+  - id: avoid_premature_exfiltration_claim
+    description: Do not declare exfiltration confirmed before confirmation exists.
+    type: avoid_premature_conclusion
+    decision_category: exfiltration
+    conclusion_confidence: confirmed
+    confirmation_fact: F008
+    points: 30
