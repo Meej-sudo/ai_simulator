@@ -52,6 +52,10 @@ Then open:
 - API docs: <http://localhost:8000/docs>
 - Health check: <http://localhost:8000/health>
 
+The browser uses the frontend's same-origin `/api` path. Next.js proxies those
+requests to the backend service, so the UI also works when opened through a server
+IP or hostname without requiring browser CORS configuration.
+
 To use OpenAI, copy `.env.example` to `.env`, set `LLM_PROVIDER=openai`, and provide `OPENAI_API_KEY`. `OPENAI_MODEL` is configurable.
 
 To use the local Ollama server, set these values in `.env`:

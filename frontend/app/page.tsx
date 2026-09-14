@@ -45,7 +45,7 @@ type CompletedExercise = {
   possibleScore: number;
 };
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {

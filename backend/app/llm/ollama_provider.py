@@ -1,4 +1,6 @@
 import httpx
+
+from .errors import LLMProviderError
 from .models import RoleResponse, RoleResponseRequest
 from .prompts import build_system_prompt
 
@@ -28,15 +30,30 @@ class OllamaLLMProvider:
             "options": {"temperature": 0.2},
         }
 
-        if self.client is None:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(f"{self.base_url}/api/chat", json=payload)
-        else:
-            response = await self.client.post(f"{self.base_url}/api/chat", json=payload)
+        try:
+            if self.client is None:
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    response = await client.post(f"{self.base_url}/api/chat", json=payload)
+            else:
+                response = await self.client.post(f"{self.base_url}/api/chat", json=payload)
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise LLMProviderError(
+                f"Ollama request timed out after {self.timeout_seconds:g} seconds"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise LLMProviderError(
+                f"Ollama returned HTTP {exc.response.status_code}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise LLMProviderError(
+                f"Could not connect to Ollama at {self.base_url}"
+            ) from exc
 
-        response.raise_for_status()
         try:
             content = response.json()["message"]["content"]
             return RoleResponse.model_validate_json(content)
         except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Ollama returned an invalid structured role response") from exc
+            raise LLMProviderError(
+                "Ollama returned an invalid structured role response"
+            ) from exc

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.domain.evaluation.engine import EvaluationResult
+from app.llm.errors import LLMProviderError
 from app.schemas.api import (
     ActionAcceptedResponse,
     AdvanceTimeRequest,
@@ -48,6 +49,8 @@ async def call_async(operation):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InvalidOperationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 def scenario_summary(compiled) -> ScenarioSummaryResponse:

@@ -1,12 +1,14 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.api.routes import router
 from app.core.database import get_db
+from app.llm.errors import LLMProviderError
 from app.llm.fake_provider import FakeLLMProvider
 from app.models.database import Base
 from app.services.scenario_registry import ScenarioRegistry
@@ -79,3 +81,50 @@ def test_http_session_workflow_includes_auditable_timestamps(tmp_path: Path):
         ).status_code == 409
         final_events = client.get(f"/sessions/{session_id}/events").json()
         assert final_events[-1]["event_type"] == "SESSION_COMPLETED"
+
+class FailingLLMProvider:
+    async def generate_role_response(self, request):
+        raise LLMProviderError("Could not connect to Ollama at http://ollama:11434")
+
+
+def test_llm_failure_returns_cors_enabled_bad_gateway(tmp_path: Path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'cors.sqlite3'}")
+    Base.metadata.create_all(engine)
+    database = Session(engine)
+    registry = ScenarioRegistry(SCENARIOS)
+    registry.load()
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.state.scenarios = registry
+    app.state.llm_provider = FailingLLMProvider()
+    app.include_router(router)
+
+    def database_override():
+        yield database
+
+    app.dependency_overrides[get_db] = database_override
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        )
+        session_id = created.json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        response = client.post(
+            f"/sessions/{session_id}/ask",
+            headers={"Origin": "http://localhost:3000"},
+            json={"target_role": "soc", "message": "What happened?"},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "Could not connect to Ollama at http://ollama:11434"
+    }
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

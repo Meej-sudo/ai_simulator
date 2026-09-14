@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.domain.scenarios.models import CommunicationStyle, FactDefinition
+from app.llm.errors import LLMProviderError
 from app.llm.models import ResponseCertainty, RoleResponseRequest
 from app.llm.ollama_provider import OllamaLLMProvider
 
@@ -77,7 +78,7 @@ async def test_ollama_provider_rejects_invalid_structured_response():
         )
 
         with pytest.raises(
-            RuntimeError,
+            LLMProviderError,
             match="Ollama returned an invalid structured role response",
         ):
             await provider.generate_role_response(role_request())
