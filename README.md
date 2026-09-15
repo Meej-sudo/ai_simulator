@@ -128,7 +128,7 @@ Create or update `.env`:
 
 ```env
 LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://10.45.10.56:11434
+OLLAMA_BASE_URL=
 OLLAMA_MODEL=gpt-oss:120b
 OLLAMA_TIMEOUT_SECONDS=300
 ```
