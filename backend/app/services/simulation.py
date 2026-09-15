@@ -1,13 +1,31 @@
 from sqlalchemy.orm import Session
 
 from app.domain.evaluation.engine import EvaluationEngine, EvaluationResult
-from app.domain.knowledge.engine import KnowledgeEngine
+from app.domain.knowledge.engine import KnowledgeEngine, RoleKnowledge
 from app.domain.scenarios.models import CONFIDENCE_SEMANTICS, Confidence, RuntimeScenario
-from app.domain.simulation.models import EventSnapshot, EventType, SessionStatus
+from app.domain.simulation.models import (
+    AssessmentProjection,
+    AssessmentSnapshot,
+    EventSnapshot,
+    EventType,
+    InvestigationRequestResult,
+    InvestigationRun,
+    InvestigationStatus,
+    SessionStatus,
+)
 from app.domain.simulation.timeline import TimelineEngine
 from app.llm.base import LLMProvider
-from app.llm.models import RoleResponseRequest
-from app.llm.validation import ConstrainedRoleResponder
+from app.llm.models import (
+    AssessmentInterpretationRequest,
+    EligibleInvestigation,
+    InvestigationInterpretationRequest,
+    RoleResponseRequest,
+)
+from app.llm.validation import (
+    ConstrainedAssessmentInterpreter,
+    ConstrainedInvestigationInterpreter,
+    ConstrainedRoleResponder,
+)
 from app.models.database import SessionRecord
 from app.repositories.sessions import SessionRepository
 from app.services.errors import InvalidOperationError, NotFoundError
@@ -22,6 +40,10 @@ class SimulationService:
         self.timeline_engine = TimelineEngine()
         self.evaluation_engine = EvaluationEngine()
         self.role_responder = ConstrainedRoleResponder(llm_provider)
+        self.investigation_interpreter = ConstrainedInvestigationInterpreter(
+            llm_provider
+        )
+        self.assessment_interpreter = ConstrainedAssessmentInterpreter(llm_provider)
 
     def create_session(
         self, scenario_id: str, variant_id: str, seed: int | None
@@ -55,16 +77,38 @@ class SimulationService:
     def advance_time(self, session_id: str, minutes: int) -> SessionRecord:
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
-        new_time = session.simulation_time + minutes
+        old_time = session.simulation_time
+        new_time = old_time + minutes
         if new_time > scenario.scenario.duration_minutes:
             raise InvalidOperationError(
                 f"advance exceeds scenario duration ({scenario.scenario.duration_minutes} minutes)"
             )
-        old_time = session.simulation_time
-        for timeline_event in self.timeline_engine.due_events(
-            scenario.timeline, old_time, new_time
+
+        due: list[tuple[int, int, object]] = [
+            (item.at_minute, 0, item)
+            for item in self.timeline_engine.due_events(
+                scenario.timeline, old_time, new_time
+            )
+        ]
+        due.extend(
+            (run.due_at, 1, run)
+            for run in self.investigations(session.id)
+            if run.status == InvestigationStatus.IN_PROGRESS
+            and old_time < run.due_at <= new_time
+        )
+        for _, kind, item in sorted(
+            due,
+            key=lambda entry: (
+                entry[0],
+                entry[1],
+                entry[2].id,
+            ),
         ):
-            self._trigger_timeline_event(session, timeline_event)
+            if kind == 0:
+                self._trigger_timeline_event(session, item)
+            else:
+                self._complete_investigation(session, scenario, item)
+
         session.simulation_time = new_time
         self.repo.append_event(
             session.id,
@@ -84,7 +128,7 @@ class SimulationService:
         self.repo.commit()
         return session
 
-    def role_knowledge(self, session_id: str, role_id: str):
+    def role_knowledge(self, session_id: str, role_id: str) -> RoleKnowledge:
         session = self.get_session(session_id)
         scenario = self._runtime_scenario(session)
         self._require_role(scenario, role_id)
@@ -93,45 +137,43 @@ class SimulationService:
             scenario, events, role_id, session.simulation_time
         )
 
-    def share_fact(
-        self, session_id: str, from_role: str, to_role: str, fact_id: str
+    def share_evidence(
+        self, session_id: str, from_role: str, to_role: str, evidence_id: str
     ):
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         self._require_role(scenario, from_role)
         self._require_role(scenario, to_role)
         try:
-            scenario.fact(fact_id)
+            scenario.evidence(evidence_id)
         except StopIteration as exc:
-            raise NotFoundError(f"fact not found: {fact_id}") from exc
-        known = {fact.id for fact in self.role_knowledge(session.id, from_role)}
-        if fact_id not in known:
+            raise NotFoundError(f"evidence not found: {evidence_id}") from exc
+        if evidence_id not in self.role_knowledge(session.id, from_role).evidence_ids:
             raise InvalidOperationError(
-                f"role {from_role} cannot share a fact it does not know"
+                f"role {from_role} cannot share evidence it does not know"
             )
-        shared = self.repo.append_event(
+        event = self.repo.append_event(
             session.id,
             session.simulation_time,
-            EventType.FACT_SHARED,
+            EventType.EVIDENCE_SHARED,
             actor_role=from_role,
             target_role=to_role,
-            payload={"fact_id": fact_id},
-        )
-        self.repo.append_event(
-            session.id,
-            session.simulation_time,
-            EventType.FACT_LEARNED,
-            actor_role=to_role,
-            payload={"fact_id": fact_id, "source": "shared", "from_role": from_role},
+            payload={"evidence_id": evidence_id},
         )
         self.repo.commit()
-        return shared
+        return event
+
+    def share_fact(
+        self, session_id: str, from_role: str, to_role: str, fact_id: str
+    ):
+        """Compatibility alias for clients migrating to share-evidence."""
+        return self.share_evidence(session_id, from_role, to_role, fact_id)
 
     async def ask_role(self, session_id: str, target_role: str, message: str):
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         role = self._require_role(scenario, target_role)
-        facts = self.role_knowledge(session.id, target_role)
+        knowledge = self.role_knowledge(session.id, target_role)
         self.repo.append_event(
             session.id,
             session.simulation_time,
@@ -146,21 +188,16 @@ class SimulationService:
             communication_style=role.communication_style,
             response_guidance=role.response_guidance,
             simulation_time=session.simulation_time,
-            permitted_facts=facts,
-            confidence_semantics={
-                key.value: value for key, value in CONFIDENCE_SEMANTICS.items()
-            },
+            permitted_observations=knowledge.observations,
+            permitted_findings=knowledge.findings,
             trainee_question=message,
         )
         validated = await self.role_responder.generate(request)
-        for violation in validated.violations:
-            self.repo.append_event(
-                session.id,
-                session.simulation_time,
-                EventType.LLM_POLICY_VIOLATION,
-                target_role=target_role,
-                payload=violation,
-            )
+        self._record_llm_violations(
+            session,
+            validated.violations,
+            target_role=target_role,
+        )
         response = validated.response
         self.repo.append_event(
             session.id,
@@ -171,6 +208,270 @@ class SimulationService:
         )
         self.repo.commit()
         return response
+
+    async def request_investigation(
+        self,
+        session_id: str,
+        requester_role: str,
+        performer_role: str,
+        request_text: str,
+    ) -> InvestigationRequestResult:
+        session = self._running_session(session_id)
+        scenario = self._runtime_scenario(session)
+        self._require_role(scenario, requester_role)
+        self._require_role(scenario, performer_role)
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.INVESTIGATION_REQUESTED,
+            actor_role=requester_role,
+            target_role=performer_role,
+            payload={"request": request_text},
+        )
+
+        eligible = self._eligible_investigations(
+            session,
+            scenario,
+            performer_role,
+        )
+        interpretation_request = InvestigationInterpretationRequest(
+            trainee_request=request_text,
+            performer_role=performer_role,
+            eligible_investigations=[
+                EligibleInvestigation(
+                    id=item.id,
+                    label=item.label,
+                    request_description=item.request_description,
+                    match_hints=item.match_hints,
+                )
+                for item in eligible
+            ],
+        )
+        validated = await self.investigation_interpreter.interpret(
+            interpretation_request
+        )
+        self._record_llm_violations(
+            session,
+            validated.violations,
+            target_role=performer_role,
+        )
+        interpretation = validated.response
+        if not interpretation.matched or interpretation.investigation_id is None:
+            reason = "The request did not match a currently available investigation."
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.INVESTIGATION_MATCH_FAILED,
+                actor_role=requester_role,
+                target_role=performer_role,
+                payload={"request": request_text, "reason": reason},
+            )
+            self.repo.commit()
+            return InvestigationRequestResult(accepted=False, reason=reason)
+
+        eligible_by_id = {item.id: item for item in eligible}
+        investigation = eligible_by_id.get(interpretation.investigation_id)
+        if investigation is None:
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.INVESTIGATION_REJECTED,
+                actor_role=requester_role,
+                target_role=performer_role,
+                payload={
+                    "request": request_text,
+                    "reason": "The selected investigation is no longer eligible.",
+                },
+            )
+            self.repo.commit()
+            return InvestigationRequestResult(
+                accepted=False,
+                reason="The selected investigation is no longer eligible.",
+            )
+
+        due_at = session.simulation_time + investigation.duration_minutes
+        started = self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.INVESTIGATION_STARTED,
+            actor_role=requester_role,
+            target_role=performer_role,
+            payload={
+                "investigation_id": investigation.id,
+                "label": investigation.label,
+                "request": request_text,
+                "started_at": session.simulation_time,
+                "due_at": due_at,
+            },
+        )
+        run = InvestigationRun(
+            id=started.id,
+            investigation_id=investigation.id,
+            label=investigation.label,
+            requester_role=requester_role,
+            performer_role=performer_role,
+            request=request_text,
+            status=InvestigationStatus.IN_PROGRESS,
+            started_at=session.simulation_time,
+            due_at=due_at,
+        )
+        if due_at == session.simulation_time:
+            self._complete_investigation(session, scenario, run)
+            run = run.model_copy(
+                update={
+                    "status": InvestigationStatus.COMPLETED,
+                    "completed_at": due_at,
+                }
+            )
+        self.repo.commit()
+        return InvestigationRequestResult(
+            accepted=True,
+            reason="Investigation started.",
+            investigation=run,
+        )
+
+    def investigations(self, session_id: str) -> list[InvestigationRun]:
+        session = self.get_session(session_id)
+        scenario = self._runtime_scenario(session)
+        events = self.repo.events(session.id)
+        completions = {
+            event.payload.get("started_event_id"): event
+            for event in events
+            if event.event_type == EventType.INVESTIGATION_COMPLETED
+        }
+        runs: list[InvestigationRun] = []
+        for event in events:
+            if event.event_type != EventType.INVESTIGATION_STARTED:
+                continue
+            try:
+                definition = scenario.investigation(event.payload["investigation_id"])
+            except (KeyError, StopIteration):
+                continue
+            completion = completions.get(event.id)
+            runs.append(
+                InvestigationRun(
+                    id=event.id,
+                    investigation_id=definition.id,
+                    label=definition.label,
+                    requester_role=event.actor_role or "",
+                    performer_role=event.target_role or "",
+                    request=str(event.payload.get("request", "")),
+                    status=(
+                        InvestigationStatus.COMPLETED
+                        if completion
+                        else InvestigationStatus.IN_PROGRESS
+                    ),
+                    started_at=int(event.payload.get("started_at", event.simulation_time)),
+                    due_at=int(event.payload["due_at"]),
+                    completed_at=completion.simulation_time if completion else None,
+                )
+            )
+        return runs
+
+    async def record_assessment(
+        self,
+        session_id: str,
+        actor_role: str,
+        statement: str,
+    ) -> list[AssessmentSnapshot]:
+        session = self._running_session(session_id)
+        scenario = self._runtime_scenario(session)
+        self._require_role(scenario, actor_role)
+        knowledge = self.role_knowledge(session.id, actor_role)
+        request = AssessmentInterpretationRequest(
+            trainee_statement=statement,
+            actor_role=actor_role,
+            hypotheses=scenario.hypotheses,
+            known_observations=knowledge.observations,
+            known_findings=knowledge.findings,
+            confidence_semantics={
+                key.value: value for key, value in CONFIDENCE_SEMANTICS.items()
+            },
+        )
+        validated = await self.assessment_interpreter.interpret(request)
+        self._record_llm_violations(
+            session,
+            validated.violations,
+            target_role=actor_role,
+        )
+        recorded: list[AssessmentSnapshot] = []
+        for normalized in validated.response.assessments:
+            hypothesis = scenario.hypothesis(normalized.hypothesis_id)
+            event = self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.ASSESSMENT_RECORDED,
+                actor_role=actor_role,
+                payload={
+                    "hypothesis_id": hypothesis.id,
+                    "hypothesis_key": hypothesis.key,
+                    "hypothesis_label": hypothesis.label,
+                    "confidence": normalized.confidence.value,
+                    "basis_evidence_ids": normalized.basis_evidence_ids,
+                    "statement": statement,
+                },
+            )
+            recorded.append(
+                AssessmentSnapshot(
+                    event_id=event.id,
+                    hypothesis_id=hypothesis.id,
+                    hypothesis_key=hypothesis.key,
+                    hypothesis_label=hypothesis.label,
+                    actor_role=actor_role,
+                    confidence=normalized.confidence,
+                    basis_evidence_ids=normalized.basis_evidence_ids,
+                    statement=statement,
+                    recorded_at=session.simulation_time,
+                )
+            )
+        if not recorded:
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.ASSESSMENT_INTERPRETATION_FAILED,
+                actor_role=actor_role,
+                payload={
+                    "statement": statement,
+                    "reason": "No public hypothesis could be mapped reliably.",
+                },
+            )
+        self.repo.commit()
+        return recorded
+
+    def assessments(self, session_id: str) -> AssessmentProjection:
+        session = self.get_session(session_id)
+        scenario = self._runtime_scenario(session)
+        history: list[AssessmentSnapshot] = []
+        for event in self.repo.events(session.id):
+            if event.event_type != EventType.ASSESSMENT_RECORDED:
+                continue
+            try:
+                hypothesis = scenario.hypothesis(event.payload["hypothesis_id"])
+                confidence = Confidence(event.payload["confidence"])
+            except (KeyError, StopIteration, ValueError):
+                continue
+            history.append(
+                AssessmentSnapshot(
+                    event_id=event.id,
+                    hypothesis_id=hypothesis.id,
+                    hypothesis_key=hypothesis.key,
+                    hypothesis_label=hypothesis.label,
+                    actor_role=event.actor_role or "",
+                    confidence=confidence,
+                    basis_evidence_ids=list(
+                        event.payload.get("basis_evidence_ids", [])
+                    ),
+                    statement=str(event.payload.get("statement", "")),
+                    recorded_at=event.simulation_time,
+                )
+            )
+        current_by_hypothesis: dict[str, AssessmentSnapshot] = {}
+        for item in history:
+            current_by_hypothesis[item.hypothesis_id] = item
+        return AssessmentProjection(
+            history=history,
+            current=list(current_by_hypothesis.values()),
+        )
 
     def make_decision(
         self,
@@ -211,7 +512,17 @@ class SimulationService:
 
     def events(self, session_id: str) -> list[EventSnapshot]:
         self.get_session(session_id)
-        return self.repo.events(session_id)
+        protected = {
+            EventType.OBSERVATION_REVEALED,
+            EventType.FINDING_REVEALED,
+            EventType.EVIDENCE_SHARED,
+        }
+        return [
+            event.model_copy(update={"payload": {"redacted": True}})
+            if event.event_type in protected
+            else event
+            for event in self.repo.events(session_id)
+        ]
 
     def evaluation(self, session_id: str) -> EvaluationResult:
         session = self.get_session(session_id)
@@ -227,6 +538,10 @@ class SimulationService:
     def roles(self, session_id: str):
         session = self.get_session(session_id)
         return self._runtime_scenario(session).roles
+
+    def external_entities(self, session_id: str):
+        session = self.get_session(session_id)
+        return self._runtime_scenario(session).external_entities
 
     def _running_session(self, session_id: str) -> SessionRecord:
         session = self.get_session(session_id)
@@ -244,6 +559,72 @@ class SimulationService:
         except StopIteration as exc:
             raise NotFoundError(f"role not found: {role_id}") from exc
 
+    def _eligible_investigations(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        performer_role: str,
+    ):
+        known = self.role_knowledge(session.id, performer_role).evidence_ids
+        started_ids = {
+            event.payload.get("investigation_id")
+            for event in self.repo.events(session.id)
+            if event.event_type == EventType.INVESTIGATION_STARTED
+        }
+        eligible = []
+        for item in scenario.investigations:
+            prerequisites = item.prerequisites
+            if performer_role not in item.performer_roles:
+                continue
+            if not set(prerequisites.all_evidence).issubset(known):
+                continue
+            if prerequisites.any_evidence and not (
+                set(prerequisites.any_evidence) & known
+            ):
+                continue
+            if not item.repeatable and item.id in started_ids:
+                continue
+            if (
+                session.simulation_time + item.duration_minutes
+                > scenario.scenario.duration_minutes
+            ):
+                continue
+            eligible.append(item)
+        return eligible
+
+    def _complete_investigation(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        run: InvestigationRun,
+    ) -> None:
+        self.repo.append_event(
+            session.id,
+            run.due_at,
+            EventType.INVESTIGATION_COMPLETED,
+            actor_role=run.requester_role,
+            target_role=run.performer_role,
+            payload={
+                "investigation_id": run.investigation_id,
+                "started_event_id": run.id,
+                "started_at": run.started_at,
+                "due_at": run.due_at,
+            },
+        )
+        outcome = scenario.investigation_outcome(run.investigation_id)
+        for finding_id in outcome.reveal_findings:
+            self.repo.append_event(
+                session.id,
+                run.due_at,
+                EventType.FINDING_REVEALED,
+                actor_role=run.performer_role,
+                payload={
+                    "finding_id": finding_id,
+                    "source": "investigation",
+                    "investigation_id": run.investigation_id,
+                },
+            )
+
     def _trigger_timeline_event(self, session, timeline_event) -> None:
         self.repo.append_event(
             session.id,
@@ -252,15 +633,31 @@ class SimulationService:
             target_role=timeline_event.role,
             payload={"timeline_event_id": timeline_event.id},
         )
-        for fact_id in timeline_event.fact_ids:
+        for observation_id in timeline_event.observation_ids:
             self.repo.append_event(
                 session.id,
                 timeline_event.at_minute,
-                EventType.FACT_LEARNED,
+                EventType.OBSERVATION_REVEALED,
                 actor_role=timeline_event.role,
                 payload={
-                    "fact_id": fact_id,
+                    "observation_id": observation_id,
                     "source": "timeline",
                     "timeline_event_id": timeline_event.id,
                 },
+            )
+
+    def _record_llm_violations(
+        self,
+        session: SessionRecord,
+        violations: list[dict[str, object]],
+        *,
+        target_role: str,
+    ) -> None:
+        for violation in violations:
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.LLM_POLICY_VIOLATION,
+                target_role=target_role,
+                payload=violation,
             )

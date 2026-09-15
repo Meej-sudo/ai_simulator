@@ -1,42 +1,40 @@
 "use client";
 
 import { useState } from "react";
-import type { ReactNode } from "react";
 
 import type {
   Confidence,
+  InvestigationDefinition,
   ScenarioDocument,
   ScoringRule,
   ScoringRuleType,
-  VariantDefinition,
 } from "./scenario-types";
-
-type Section = "overview" | "roles" | "facts" | "timeline" | "variants" | "scoring";
 
 type Props = {
   document: ScenarioDocument;
   onChange: (document: ScenarioDocument) => void;
 };
 
-const SECTIONS: { id: Section; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "roles", label: "Roles" },
-  { id: "facts", label: "Facts" },
-  { id: "timeline", label: "Timeline" },
-  { id: "variants", label: "Variants" },
-  { id: "scoring", label: "Scoring" },
+type Section =
+  | "scenario"
+  | "roles"
+  | "entities"
+  | "evidence"
+  | "hypotheses"
+  | "investigations"
+  | "timeline"
+  | "variants"
+  | "scoring";
+
+const confidenceOptions: Confidence[] = ["low", "medium", "high", "confirmed"];
+const scoringTypes: ScoringRuleType[] = [
+  "role_contacted_within",
+  "evidence_shared_within",
+  "decision_within",
+  "avoid_premature_assessment",
 ];
 
-const CONFIDENCE_LEVELS: Confidence[] = ["low", "medium", "high", "confirmed"];
-
-const RULE_TYPES: { id: ScoringRuleType; label: string }[] = [
-  { id: "role_contacted_within", label: "Role contacted within time" },
-  { id: "fact_shared_within", label: "Fact shared within time" },
-  { id: "decision_within", label: "Decision made within time" },
-  { id: "avoid_premature_conclusion", label: "Avoid premature conclusion" },
-];
-
-function updateAt<T>(items: T[], index: number, item: T): T[] {
+function replaceAt<T>(items: T[], index: number, item: T): T[] {
   return items.map((current, currentIndex) => currentIndex === index ? item : current);
 }
 
@@ -44,34 +42,200 @@ function removeAt<T>(items: T[], index: number): T[] {
   return items.filter((_, currentIndex) => currentIndex !== index);
 }
 
+function nextId(prefix: string, existing: string[]): string {
+  let number = 1;
+  while (existing.includes(`${prefix}${String(number).padStart(3, "0")}`)) number += 1;
+  return `${prefix}${String(number).padStart(3, "0")}`;
+}
+
+function nextKey(prefix: string, existing: string[]): string {
+  let number = 1;
+  while (existing.includes(`${prefix}_${number}`)) number += 1;
+  return `${prefix}_${number}`;
+}
+
 function lines(value: string): string[] {
   return value.split("\n").map((item) => item.trim()).filter(Boolean);
 }
 
-function uniqueId(prefix: string, ids: string[]): string {
-  let suffix = ids.length + 1;
-  while (ids.includes(`${prefix}_${suffix}`)) suffix += 1;
-  return `${prefix}_${suffix}`;
+function scalar(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value !== "" && Number.isFinite(Number(value))) return Number(value);
+  return value;
 }
 
-function formatGroundTruthValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  return JSON.stringify(value) ?? "";
+function renameEvidenceReferences(
+  document: ScenarioDocument,
+  previous: string,
+  next: string,
+): ScenarioDocument {
+  const rename = (value: string) => value === previous ? next : value;
+  return {
+    ...document,
+    investigations: document.investigations.map((item) => ({
+      ...item,
+      prerequisites: {
+        all_evidence: item.prerequisites.all_evidence.map(rename),
+        any_evidence: item.prerequisites.any_evidence.map(rename),
+      },
+    })),
+    timeline: document.timeline.map((item) => ({
+      ...item,
+      observation_ids: item.observation_ids.map(rename),
+    })),
+    variants: document.variants.map((variant) => ({
+      ...variant,
+      observation_overrides: variant.observation_overrides.map((item) => ({
+        ...item,
+        observation_id: rename(item.observation_id),
+      })),
+      timeline_overrides: variant.timeline_overrides.map((item) => ({
+        ...item,
+        observation_ids: item.observation_ids?.map(rename) ?? null,
+      })),
+      investigation_outcomes: variant.investigation_outcomes.map((item) => ({
+        ...item,
+        reveal_findings: item.reveal_findings.map(rename),
+      })),
+    })),
+    scoring_rules: document.scoring_rules.map((item) => ({
+      ...item,
+      trigger_evidence: item.trigger_evidence === previous ? next : item.trigger_evidence,
+      evidence_id: item.evidence_id === previous ? next : item.evidence_id,
+      confirmation_evidence: item.confirmation_evidence === previous
+        ? next
+        : item.confirmation_evidence,
+    })),
+  };
 }
 
-function parseGroundTruthValue(value: string): unknown {
-  if (value === "") return "";
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
+function renameRoleReferences(
+  document: ScenarioDocument,
+  previous: string,
+  next: string,
+): ScenarioDocument {
+  return {
+    ...document,
+    investigations: document.investigations.map((item) => ({
+      ...item,
+      performer_roles: item.performer_roles.map((id) => id === previous ? next : id),
+    })),
+    timeline: document.timeline.map((item) => ({
+      ...item,
+      role: item.role === previous ? next : item.role,
+    })),
+    variants: document.variants.map((variant) => ({
+      ...variant,
+      timeline_overrides: variant.timeline_overrides.map((item) => ({
+        ...item,
+        role: item.role === previous ? next : item.role,
+      })),
+    })),
+    scoring_rules: document.scoring_rules.map((item) => ({
+      ...item,
+      target_role: item.target_role === previous ? next : item.target_role,
+    })),
+  };
 }
 
-function SectionHeading({ title, description, action }: {
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  wide = false,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  type?: "text" | "number";
+  wide?: boolean;
+}) {
+  return (
+    <label className={wide ? "wide-field" : ""}>
+      {label}
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  help,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  help?: string;
+}) {
+  return (
+    <label className="wide-field">
+      {label}
+      <textarea rows={3} value={value} onChange={(event) => onChange(event.target.value)} />
+      {help && <span className="field-help">{help}</span>}
+    </label>
+  );
+}
+
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onChange,
+  empty,
+}: {
+  label: string;
+  options: { id: string; label: string }[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+  empty: string;
+}) {
+  return (
+    <div className="field-group wide-field">
+      <span className="field-label">{label}</span>
+      {options.length === 0 ? (
+        <span className="field-help">{empty}</span>
+      ) : (
+        <div className="reference-list">
+          {options.map((option) => (
+            <label className="reference-option" key={option.id}>
+              <input
+                type="checkbox"
+                checked={selected.includes(option.id)}
+                onChange={(event) => {
+                  onChange(
+                    event.target.checked
+                      ? [...selected, option.id]
+                      : selected.filter((id) => id !== option.id),
+                  );
+                }}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Heading({
+  title,
+  description,
+  onAdd,
+  addLabel,
+}: {
   title: string;
   description: string;
-  action?: ReactNode;
+  onAdd?: () => void;
+  addLabel?: string;
 }) {
   return (
     <div className="form-section-heading">
@@ -79,541 +243,281 @@ function SectionHeading({ title, description, action }: {
         <h3>{title}</h3>
         <p>{description}</p>
       </div>
-      {action}
-    </div>
-  );
-}
-
-function CardHeading({ title, onRemove }: { title: string; onRemove: () => void }) {
-  return (
-    <div className="form-card-heading">
-      <strong>{title}</strong>
-      <button type="button" className="danger-button" onClick={onRemove}>Remove</button>
-    </div>
-  );
-}
-
-function ReferenceChecklist({ options, selected, onChange, emptyText }: {
-  options: { id: string; label: string }[];
-  selected: string[];
-  onChange: (selected: string[]) => void;
-  emptyText: string;
-}) {
-  if (options.length === 0) return <span className="field-help">{emptyText}</span>;
-  return (
-    <div className="reference-list">
-      {options.map((option) => (
-        <label className="reference-option" key={option.id}>
-          <input
-            type="checkbox"
-            checked={selected.includes(option.id)}
-            onChange={(event) => {
-              onChange(event.target.checked
-                ? [...selected, option.id]
-                : selected.filter((item) => item !== option.id));
-            }}
-          />
-          <span>{option.label}</span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-function GroundTruthEditor({ value, onChange }: {
-  value: Record<string, unknown>;
-  onChange: (value: Record<string, unknown>) => void;
-}) {
-  const entries = Object.entries(value);
-
-  function replaceEntry(index: number, key: string, entryValue: unknown) {
-    const existingKey = entries[index]?.[0];
-    if (key !== existingKey && Object.prototype.hasOwnProperty.call(value, key)) return;
-    const next = [...entries];
-    next[index] = [key, entryValue];
-    onChange(Object.fromEntries(next));
-  }
-
-  function addEntry() {
-    const key = uniqueId("new_value", Object.keys(value));
-    onChange({ ...value, [key]: "" });
-  }
-
-  return (
-    <div className="nested-editor">
-      <div className="nested-heading">
-        <div>
-          <strong>Ground truth</strong>
-          <small>Values accept text, numbers, true/false, or JSON.</small>
-        </div>
-        <button type="button" className="secondary-button small-button" onClick={addEntry}>
-          Add value
+      {onAdd && (
+        <button type="button" className="small-button" onClick={onAdd}>
+          {addLabel ?? "Add"}
         </button>
-      </div>
-      {entries.map(([key, entryValue], index) => (
-        <div className="key-value-row" key={`${key}-${index}`}>
-          <label>
-            Key
-            <input
-              type="text"
-              value={key}
-              onChange={(event) => replaceEntry(index, event.target.value, entryValue)}
-            />
-          </label>
-          <label>
-            Value
-            <input
-              type="text"
-              value={formatGroundTruthValue(entryValue)}
-              onChange={(event) => replaceEntry(
-                index,
-                key,
-                parseGroundTruthValue(event.target.value),
-              )}
-            />
-          </label>
-          <button
-            type="button"
-            className="danger-button compact-button"
-            onClick={() => onChange(Object.fromEntries(
-              entries.filter((_, currentIndex) => currentIndex !== index),
-            ))}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
+      )}
     </div>
   );
-}
-
-function ruleWithType(
-  rule: ScoringRule,
-  type: ScoringRuleType,
-  document: ScenarioDocument,
-): ScoringRule {
-  const next: ScoringRule = {
-    ...rule,
-    type,
-    within_minutes: null,
-    trigger_fact: null,
-    target_role: null,
-    fact_id: null,
-    decision_category: null,
-    conclusion_confidence: null,
-    confirmation_fact: null,
-  };
-  const firstFact = document.facts[0]?.id ?? null;
-  const firstRole = document.roles[0]?.id ?? null;
-  const firstCategory = document.scenario.decision_categories[0]?.id ?? null;
-
-  if (type === "role_contacted_within") {
-    return { ...next, trigger_fact: firstFact, target_role: firstRole, within_minutes: 30 };
-  }
-  if (type === "fact_shared_within") {
-    return {
-      ...next,
-      trigger_fact: firstFact,
-      fact_id: firstFact,
-      target_role: firstRole,
-      within_minutes: 30,
-    };
-  }
-  if (type === "decision_within") {
-    return {
-      ...next,
-      trigger_fact: firstFact,
-      decision_category: firstCategory,
-      within_minutes: 30,
-    };
-  }
-  return {
-    ...next,
-    decision_category: firstCategory,
-    conclusion_confidence: "confirmed",
-    confirmation_fact: firstFact,
-  };
 }
 
 export default function ScenarioForm({ document, onChange }: Props) {
-  const [section, setSection] = useState<Section>("overview");
-  const roleOptions = document.roles.map((item) => ({ id: item.id, label: item.display_name }));
-  const factOptions = document.facts.map((item) => ({ id: item.id, label: `${item.id} · ${item.statement}` }));
-  const eventOptions = document.timeline.map((item) => ({ id: item.id, label: `${item.id} · T+${item.at_minute}` }));
-  const categoryOptions = document.scenario.decision_categories.map((item) => ({
+  const [section, setSection] = useState<Section>("scenario");
+  const roles = document.roles.map((item) => ({ id: item.id, label: item.display_name }));
+  const observations = document.observations.map((item) => ({
+    id: item.id,
+    label: `${item.id} - ${item.statement}`,
+  }));
+  const findings = document.findings.map((item) => ({
+    id: item.id,
+    label: `${item.id} - ${item.statement}`,
+  }));
+  const evidence = [...observations, ...findings];
+  const hypotheses = document.hypotheses.map((item) => ({
+    id: item.id,
+    label: `${item.id} - ${item.label}`,
+  }));
+  const categories = document.scenario.decision_categories.map((item) => ({
     id: item.id,
     label: item.display_name,
   }));
+  const tabs: { id: Section; label: string; count?: number }[] = [
+    { id: "scenario", label: "Scenario" },
+    { id: "roles", label: "Roles", count: document.roles.length },
+    { id: "entities", label: "External", count: document.external_entities.length },
+    { id: "evidence", label: "Evidence", count: evidence.length },
+    { id: "hypotheses", label: "Hypotheses", count: hypotheses.length },
+    { id: "investigations", label: "Investigations", count: document.investigations.length },
+    { id: "timeline", label: "Timeline", count: document.timeline.length },
+    { id: "variants", label: "Variants", count: document.variants.length },
+    { id: "scoring", label: "Scoring", count: document.scoring_rules.length },
+  ];
 
-  function renameCategory(index: number, id: string) {
-    const previous = document.scenario.decision_categories[index].id;
-    onChange({
-      ...document,
-      scenario: {
-        ...document.scenario,
-        decision_categories: updateAt(
-          document.scenario.decision_categories,
-          index,
-          { ...document.scenario.decision_categories[index], id },
-        ),
-      },
-      scoring_rules: document.scoring_rules.map((rule) => ({
-        ...rule,
-        decision_category: rule.decision_category === previous ? id : rule.decision_category,
-      })),
-    });
+  function updateInvestigation(index: number, next: InvestigationDefinition) {
+    onChange({ ...document, investigations: replaceAt(document.investigations, index, next) });
   }
 
-  function renameRole(index: number, id: string) {
-    const previous = document.roles[index].id;
-    onChange({
-      ...document,
-      roles: updateAt(document.roles, index, { ...document.roles[index], id }),
-      timeline: document.timeline.map((event) => ({
-        ...event,
-        role: event.role === previous ? id : event.role,
-      })),
-      variants: document.variants.map((variant) => ({
-        ...variant,
-        timeline_overrides: variant.timeline_overrides.map((override) => ({
-          ...override,
-          role: override.role === previous ? id : override.role,
-        })),
-      })),
-      scoring_rules: document.scoring_rules.map((rule) => ({
-        ...rule,
-        target_role: rule.target_role === previous ? id : rule.target_role,
-      })),
-    });
-  }
-
-  function renameFact(index: number, id: string) {
-    const previous = document.facts[index].id;
-    const rename = (current: string) => current === previous ? id : current;
-    onChange({
-      ...document,
-      facts: updateAt(document.facts, index, { ...document.facts[index], id }),
-      timeline: document.timeline.map((event) => ({
-        ...event,
-        fact_ids: event.fact_ids.map(rename),
-      })),
-      variants: document.variants.map((variant) => ({
-        ...variant,
-        fact_overrides: variant.fact_overrides.map((override) => ({
-          ...override,
-          fact_id: rename(override.fact_id),
-        })),
-        timeline_overrides: variant.timeline_overrides.map((override) => ({
-          ...override,
-          fact_ids: override.fact_ids?.map(rename) ?? null,
-        })),
-      })),
-      scoring_rules: document.scoring_rules.map((rule) => ({
-        ...rule,
-        trigger_fact: rule.trigger_fact === previous ? id : rule.trigger_fact,
-        fact_id: rule.fact_id === previous ? id : rule.fact_id,
-        confirmation_fact: rule.confirmation_fact === previous ? id : rule.confirmation_fact,
-      })),
-    });
-  }
-
-  function renameEvent(index: number, id: string) {
-    const previous = document.timeline[index].id;
-    onChange({
-      ...document,
-      timeline: updateAt(document.timeline, index, { ...document.timeline[index], id }),
-      variants: document.variants.map((variant) => ({
-        ...variant,
-        timeline_overrides: variant.timeline_overrides.map((override) => ({
-          ...override,
-          event_id: override.event_id === previous ? id : override.event_id,
-        })),
-      })),
-    });
-  }
-
-  function updateVariant(index: number, variant: VariantDefinition) {
-    onChange({ ...document, variants: updateAt(document.variants, index, variant) });
+  function updateScoring(index: number, next: ScoringRule) {
+    onChange({ ...document, scoring_rules: replaceAt(document.scoring_rules, index, next) });
   }
 
   return (
     <div className="scenario-form">
       <nav className="form-tabs" aria-label="Scenario form sections">
-        {SECTIONS.map((item) => (
+        {tabs.map((tab) => (
           <button
-            key={item.id}
             type="button"
-            className={section === item.id ? "active" : ""}
-            aria-pressed={section === item.id}
-            onClick={() => setSection(item.id)}
+            key={tab.id}
+            className={section === tab.id ? "active" : ""}
+            onClick={() => setSection(tab.id)}
           >
-            {item.label}
-            <span>{
-              item.id === "roles" ? document.roles.length
-                : item.id === "facts" ? document.facts.length
-                  : item.id === "timeline" ? document.timeline.length
-                    : item.id === "variants" ? document.variants.length
-                      : item.id === "scoring" ? document.scoring_rules.length
-                        : ""
-            }</span>
+            {tab.label}{tab.count !== undefined && <span>{tab.count}</span>}
           </button>
         ))}
       </nav>
 
-      {section === "overview" && (
-        <div className="form-section">
-          <SectionHeading
+      {section === "scenario" && (
+        <section className="form-section">
+          <Heading
             title="Scenario overview"
-            description="Public metadata and the broad decision categories shown to trainees."
+            description="Core exercise metadata and broad decision categories."
           />
-          <div className="form-grid">
-            <label>
-              Scenario ID
-              <input type="text" value={document.scenario.id} readOnly />
-              <small className="field-help">The ID cannot be changed after creation.</small>
-            </label>
-            <label>
-              Duration in minutes
-              <input
+          <div className="form-card">
+            <div className="form-grid">
+              <Field label="Stable ID" value={document.scenario.id} onChange={() => undefined} />
+              <Field
+                label="Duration (minutes)"
                 type="number"
-                min={1}
                 value={document.scenario.duration_minutes}
-                onChange={(event) => onChange({
+                onChange={(value) => onChange({
                   ...document,
-                  scenario: {
-                    ...document.scenario,
-                    duration_minutes: Number(event.target.value),
-                  },
+                  scenario: { ...document.scenario, duration_minutes: Math.max(1, Number(value)) },
                 })}
               />
-            </label>
-            <label className="wide-field">
-              Scenario name
-              <input
-                type="text"
+              <Field
+                label="Name"
+                wide
                 value={document.scenario.name}
-                onChange={(event) => onChange({
+                onChange={(value) => onChange({
                   ...document,
-                  scenario: { ...document.scenario, name: event.target.value },
+                  scenario: { ...document.scenario, name: value },
                 })}
               />
-            </label>
-            <label className="wide-field">
-              Description
-              <textarea
-                rows={3}
+              <TextField
+                label="Description"
                 value={document.scenario.description}
-                onChange={(event) => onChange({
+                onChange={(value) => onChange({
                   ...document,
-                  scenario: { ...document.scenario, description: event.target.value },
+                  scenario: { ...document.scenario, description: value },
                 })}
               />
-            </label>
+            </div>
           </div>
-
-          <SectionHeading
+          <Heading
             title="Decision categories"
-            description="Broad labels available when trainees record free-text decisions."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => {
-                  const categories = document.scenario.decision_categories;
-                  onChange({
-                    ...document,
-                    scenario: {
-                      ...document.scenario,
-                      decision_categories: [
-                        ...categories,
-                        {
-                          id: uniqueId("category", categories.map((item) => item.id)),
-                          display_name: "New category",
-                          description: "",
-                          captures_confidence: false,
-                        },
-                      ],
-                    },
-                  });
-                }}
-              >
-                Add category
-              </button>
-            )}
+            description="Categories reveal less than suggested decisions; trainees enter the decision itself."
+            addLabel="Add category"
+            onAdd={() => onChange({
+              ...document,
+              scenario: {
+                ...document.scenario,
+                decision_categories: [
+                  ...document.scenario.decision_categories,
+                  {
+                    id: nextKey("category", categories.map((item) => item.id)),
+                    display_name: "New category",
+                    description: "",
+                    captures_confidence: false,
+                  },
+                ],
+              },
+            })}
           />
           <div className="form-card-list">
-            {document.scenario.decision_categories.map((category, index) => (
-              <div className="form-card" key={`${category.id}-${index}`}>
-                <CardHeading
-                  title={category.display_name || `Category ${index + 1}`}
-                  onRemove={() => onChange({
+            {document.scenario.decision_categories.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.display_name || "Unnamed category"}</strong>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => onChange({
+                      ...document,
+                      scenario: {
+                        ...document.scenario,
+                        decision_categories: removeAt(
+                          document.scenario.decision_categories,
+                          index,
+                        ),
+                      },
+                    })}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => onChange({
                     ...document,
                     scenario: {
                       ...document.scenario,
-                      decision_categories: removeAt(
+                      decision_categories: replaceAt(
                         document.scenario.decision_categories,
                         index,
+                        { ...item, id: value },
                       ),
                     },
-                  })}
-                />
-                <div className="form-grid">
-                  <label>
-                    Category ID
-                    <input
-                      type="text"
-                      value={category.id}
-                      onChange={(event) => renameCategory(index, event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Display name
-                    <input
-                      type="text"
-                      value={category.display_name}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scenario: {
-                          ...document.scenario,
-                          decision_categories: updateAt(
-                            document.scenario.decision_categories,
-                            index,
-                            { ...category, display_name: event.target.value },
-                          ),
-                        },
-                      })}
-                    />
-                  </label>
-                  <label className="wide-field">
-                    Description
-                    <textarea
-                      rows={2}
-                      value={category.description}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scenario: {
-                          ...document.scenario,
-                          decision_categories: updateAt(
-                            document.scenario.decision_categories,
-                            index,
-                            { ...category, description: event.target.value },
-                          ),
-                        },
-                      })}
-                    />
-                  </label>
-                  <label className="check-field wide-field">
+                    scoring_rules: document.scoring_rules.map((rule) => ({
+                      ...rule,
+                      decision_category: rule.decision_category === item.id
+                        ? value
+                        : rule.decision_category,
+                    })),
+                  })} />
+                  <Field label="Display name" value={item.display_name} onChange={(value) => onChange({
+                    ...document,
+                    scenario: {
+                      ...document.scenario,
+                      decision_categories: replaceAt(
+                        document.scenario.decision_categories,
+                        index,
+                        { ...item, display_name: value },
+                      ),
+                    },
+                  })} />
+                  <TextField label="Description" value={item.description} onChange={(value) => onChange({
+                    ...document,
+                    scenario: {
+                      ...document.scenario,
+                      decision_categories: replaceAt(
+                        document.scenario.decision_categories,
+                        index,
+                        { ...item, description: value },
+                      ),
+                    },
+                  })} />
+                  <label className="check-field">
                     <input
                       type="checkbox"
-                      checked={category.captures_confidence}
+                      checked={item.captures_confidence}
                       onChange={(event) => onChange({
                         ...document,
                         scenario: {
                           ...document.scenario,
-                          decision_categories: updateAt(
+                          decision_categories: replaceAt(
                             document.scenario.decision_categories,
                             index,
-                            { ...category, captures_confidence: event.target.checked },
+                            { ...item, captures_confidence: event.target.checked },
                           ),
                         },
                       })}
                     />
-                    Ask trainees to record confidence for this category
+                    Ask for confidence
                   </label>
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {section === "roles" && (
-        <div className="form-section">
-          <SectionHeading
-            title="Exercise roles"
-            description="People the trainee can question, their responsibilities, and speaking style."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => onChange({
-                  ...document,
-                  roles: [
-                    ...document.roles,
-                    {
-                      id: uniqueId("role", document.roles.map((item) => item.id)),
-                      display_name: "New role",
-                      responsibilities: ["Describe this role's responsibility"],
-                      communication_style: { tone: "professional", verbosity: "medium" },
-                      response_guidance: null,
-                    },
-                  ],
-                })}
-              >
-                Add role
-              </button>
-            )}
+        <section className="form-section">
+          <Heading
+            title="Simulation roles"
+            description="Role responsibilities and communication style constrain role chat."
+            addLabel="Add role"
+            onAdd={() => onChange({
+              ...document,
+              roles: [
+                ...document.roles,
+                {
+                  id: nextKey("role", document.roles.map((item) => item.id)),
+                  display_name: "New role",
+                  responsibilities: ["Describe this role's responsibility"],
+                  communication_style: { tone: "professional", verbosity: "medium" },
+                  response_guidance: null,
+                },
+              ],
+            })}
           />
           <div className="form-card-list">
-            {document.roles.map((role, index) => (
-              <div className="form-card" key={`${role.id}-${index}`}>
-                <CardHeading
-                  title={role.display_name || `Role ${index + 1}`}
-                  onRemove={() => onChange({
+            {document.roles.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.display_name}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
                     ...document,
                     roles: removeAt(document.roles, index),
-                  })}
-                />
+                  })}>Remove</button>
+                </div>
                 <div className="form-grid">
-                  <label>
-                    Role ID
-                    <input
-                      type="text"
-                      value={role.id}
-                      onChange={(event) => renameRole(index, event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Display name
-                    <input
-                      type="text"
-                      value={role.display_name}
-                      onChange={(event) => onChange({
-                        ...document,
-                        roles: updateAt(document.roles, index, {
-                          ...role,
-                          display_name: event.target.value,
-                        }),
-                      })}
-                    />
-                  </label>
-                  <label>
-                    Tone
-                    <input
-                      type="text"
-                      value={role.communication_style.tone}
-                      onChange={(event) => onChange({
-                        ...document,
-                        roles: updateAt(document.roles, index, {
-                          ...role,
-                          communication_style: {
-                            ...role.communication_style,
-                            tone: event.target.value,
-                          },
-                        }),
-                      })}
-                    />
-                  </label>
+                  <Field label="ID" value={item.id} onChange={(value) => onChange(renameRoleReferences({
+                    ...document,
+                    roles: replaceAt(document.roles, index, { ...item, id: value }),
+                  }, item.id, value))} />
+                  <Field label="Display name" value={item.display_name} onChange={(value) => onChange({
+                    ...document,
+                    roles: replaceAt(document.roles, index, { ...item, display_name: value }),
+                  })} />
+                  <TextField
+                    label="Responsibilities (one per line)"
+                    value={item.responsibilities.join("\n")}
+                    onChange={(value) => onChange({
+                      ...document,
+                      roles: replaceAt(document.roles, index, {
+                        ...item,
+                        responsibilities: lines(value),
+                      }),
+                    })}
+                  />
+                  <Field label="Tone" value={item.communication_style.tone} onChange={(value) => onChange({
+                    ...document,
+                    roles: replaceAt(document.roles, index, {
+                      ...item,
+                      communication_style: { ...item.communication_style, tone: value },
+                    }),
+                  })} />
                   <label>
                     Verbosity
                     <select
-                      value={role.communication_style.verbosity}
+                      value={item.communication_style.verbosity}
                       onChange={(event) => onChange({
                         ...document,
-                        roles: updateAt(document.roles, index, {
-                          ...role,
+                        roles: replaceAt(document.roles, index, {
+                          ...item,
                           communication_style: {
-                            ...role.communication_style,
+                            ...item.communication_style,
                             verbosity: event.target.value as "low" | "medium" | "high",
                           },
                         }),
@@ -624,818 +528,784 @@ export default function ScenarioForm({ document, onChange }: Props) {
                       <option value="high">High</option>
                     </select>
                   </label>
-                  <label className="wide-field">
-                    Responsibilities (one per line)
-                    <textarea
-                      rows={4}
-                      value={role.responsibilities.join("\n")}
-                      onChange={(event) => onChange({
-                        ...document,
-                        roles: updateAt(document.roles, index, {
-                          ...role,
-                          responsibilities: lines(event.target.value),
-                        }),
-                      })}
-                    />
-                  </label>
-                  <label className="wide-field">
-                    Additional response guidance
-                    <textarea
-                      rows={3}
-                      value={role.response_guidance ?? ""}
-                      onChange={(event) => onChange({
-                        ...document,
-                        roles: updateAt(document.roles, index, {
-                          ...role,
-                          response_guidance: event.target.value || null,
-                        }),
-                      })}
-                    />
-                  </label>
+                  <TextField
+                    label="Response guidance"
+                    value={item.response_guidance ?? ""}
+                    onChange={(value) => onChange({
+                      ...document,
+                      roles: replaceAt(document.roles, index, {
+                        ...item,
+                        response_guidance: value || null,
+                      }),
+                    })}
+                  />
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {section === "facts" && (
-        <div className="form-section">
-          <SectionHeading
-            title="Incident facts"
-            description="Observations and assessments that can be revealed to roles over time."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => onChange({
-                  ...document,
-                  facts: [
-                    ...document.facts,
-                    {
-                      id: uniqueId("F", document.facts.map((item) => item.id)),
-                      type: "observation",
-                      statement: "Describe the new incident fact.",
-                      confidence: "medium",
-                    },
-                  ],
-                })}
-              >
-                Add fact
-              </button>
-            )}
+      {section === "entities" && (
+        <section className="form-section">
+          <Heading
+            title="External entities"
+            description="Authorities, law enforcement, media, and other communication recipients."
+            addLabel="Add entity"
+            onAdd={() => onChange({
+              ...document,
+              external_entities: [
+                ...document.external_entities,
+                {
+                  id: nextKey("entity", document.external_entities.map((item) => item.id)),
+                  display_name: "New external entity",
+                  type: "organization",
+                  accepts: ["incident_report"],
+                },
+              ],
+            })}
           />
           <div className="form-card-list">
-            {document.facts.map((fact, index) => (
-              <div className="form-card" key={`${fact.id}-${index}`}>
-                <CardHeading
-                  title={`${fact.id || "Fact"} · ${fact.type}`}
-                  onRemove={() => onChange({
+            {document.external_entities.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.display_name}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
                     ...document,
-                    facts: removeAt(document.facts, index),
-                  })}
-                />
-                <div className="form-grid">
-                  <label>
-                    Fact ID
-                    <input
-                      type="text"
-                      value={fact.id}
-                      onChange={(event) => renameFact(index, event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Type
-                    <select
-                      value={fact.type}
-                      onChange={(event) => onChange({
-                        ...document,
-                        facts: updateAt(document.facts, index, {
-                          ...fact,
-                          type: event.target.value as "observation" | "assessment",
-                        }),
-                      })}
-                    >
-                      <option value="observation">Observation</option>
-                      <option value="assessment">Assessment</option>
-                    </select>
-                  </label>
-                  <label>
-                    Confidence
-                    <select
-                      value={fact.confidence}
-                      onChange={(event) => onChange({
-                        ...document,
-                        facts: updateAt(document.facts, index, {
-                          ...fact,
-                          confidence: event.target.value as Confidence,
-                        }),
-                      })}
-                    >
-                      {CONFIDENCE_LEVELS.map((level) => (
-                        <option value={level} key={level}>{level}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="wide-field">
-                    Statement
-                    <textarea
-                      rows={3}
-                      value={fact.statement}
-                      onChange={(event) => onChange({
-                        ...document,
-                        facts: updateAt(document.facts, index, {
-                          ...fact,
-                          statement: event.target.value,
-                        }),
-                      })}
-                    />
-                  </label>
+                    external_entities: removeAt(document.external_entities, index),
+                  })}>Remove</button>
                 </div>
-              </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => onChange({
+                    ...document,
+                    external_entities: replaceAt(document.external_entities, index, { ...item, id: value }),
+                  })} />
+                  <Field label="Display name" value={item.display_name} onChange={(value) => onChange({
+                    ...document,
+                    external_entities: replaceAt(document.external_entities, index, { ...item, display_name: value }),
+                  })} />
+                  <Field label="Type" value={item.type} onChange={(value) => onChange({
+                    ...document,
+                    external_entities: replaceAt(document.external_entities, index, { ...item, type: value }),
+                  })} />
+                  <TextField label="Accepted communication types (one per line)" value={item.accepts.join("\n")} onChange={(value) => onChange({
+                    ...document,
+                    external_entities: replaceAt(document.external_entities, index, { ...item, accepts: lines(value) }),
+                  })} />
+                </div>
+              </article>
             ))}
           </div>
-        </div>
+        </section>
+      )}
+
+      {section === "evidence" && (
+        <section className="form-section">
+          <Heading
+            title="Observations"
+            description="Ambiguous signals granted by the timeline. They should not state the hidden answer."
+            addLabel="Add observation"
+            onAdd={() => onChange({
+              ...document,
+              observations: [
+                ...document.observations,
+                {
+                  id: nextId("O", document.observations.map((item) => item.id)),
+                  source: "monitoring",
+                  statement: "Describe an observable signal.",
+                  reliability: "medium",
+                },
+              ],
+            })}
+          />
+          <div className="form-card-list">
+            {document.observations.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.id}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
+                    ...document,
+                    observations: removeAt(document.observations, index),
+                  })}>Remove</button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => onChange(renameEvidenceReferences({
+                    ...document,
+                    observations: replaceAt(document.observations, index, { ...item, id: value }),
+                  }, item.id, value))} />
+                  <Field label="Source" value={item.source} onChange={(value) => onChange({
+                    ...document,
+                    observations: replaceAt(document.observations, index, { ...item, source: value }),
+                  })} />
+                  <TextField label="Statement" value={item.statement} onChange={(value) => onChange({
+                    ...document,
+                    observations: replaceAt(document.observations, index, { ...item, statement: value }),
+                  })} />
+                  <label>
+                    Reliability
+                    <select value={item.reliability} onChange={(event) => onChange({
+                      ...document,
+                      observations: replaceAt(document.observations, index, {
+                        ...item,
+                        reliability: event.target.value as Confidence,
+                      }),
+                    })}>
+                      {confidenceOptions.map((value) => <option key={value}>{value}</option>)}
+                    </select>
+                  </label>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <Heading
+            title="Findings"
+            description="Evidence revealed only when a matching investigation completes."
+            addLabel="Add finding"
+            onAdd={() => onChange({
+              ...document,
+              findings: [
+                ...document.findings,
+                {
+                  id: nextId("FD", document.findings.map((item) => item.id)),
+                  statement: "Describe an investigation result.",
+                  reliability: "high",
+                },
+              ],
+            })}
+          />
+          <div className="form-card-list">
+            {document.findings.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.id}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
+                    ...document,
+                    findings: removeAt(document.findings, index),
+                  })}>Remove</button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => onChange(renameEvidenceReferences({
+                    ...document,
+                    findings: replaceAt(document.findings, index, { ...item, id: value }),
+                  }, item.id, value))} />
+                  <label>
+                    Reliability
+                    <select value={item.reliability} onChange={(event) => onChange({
+                      ...document,
+                      findings: replaceAt(document.findings, index, {
+                        ...item,
+                        reliability: event.target.value as Confidence,
+                      }),
+                    })}>
+                      {confidenceOptions.map((value) => <option key={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <TextField label="Statement" value={item.statement} onChange={(value) => onChange({
+                    ...document,
+                    findings: replaceAt(document.findings, index, { ...item, statement: value }),
+                  })} />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {section === "hypotheses" && (
+        <section className="form-section">
+          <Heading
+            title="Public hypotheses"
+            description="Named propositions trainees can assess. These labels do not expose variant truth."
+            addLabel="Add hypothesis"
+            onAdd={() => onChange({
+              ...document,
+              hypotheses: [
+                ...document.hypotheses,
+                {
+                  id: nextId("H", document.hypotheses.map((item) => item.id)),
+                  key: nextKey("hypothesis", document.hypotheses.map((item) => item.key)),
+                  label: "New hypothesis",
+                },
+              ],
+            })}
+          />
+          <div className="form-card-list">
+            {document.hypotheses.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.label}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
+                    ...document,
+                    hypotheses: removeAt(document.hypotheses, index),
+                  })}>Remove</button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => onChange({
+                    ...document,
+                    hypotheses: replaceAt(document.hypotheses, index, { ...item, id: value }),
+                    scoring_rules: document.scoring_rules.map((rule) => ({
+                      ...rule,
+                      hypothesis_id: rule.hypothesis_id === item.id ? value : rule.hypothesis_id,
+                    })),
+                  })} />
+                  <Field label="Key" value={item.key} onChange={(value) => onChange({
+                    ...document,
+                    hypotheses: replaceAt(document.hypotheses, index, { ...item, key: value }),
+                  })} />
+                  <Field label="Trainee-facing label" wide value={item.label} onChange={(value) => onChange({
+                    ...document,
+                    hypotheses: replaceAt(document.hypotheses, index, { ...item, label: value }),
+                  })} />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {section === "investigations" && (
+        <section className="form-section">
+          <Heading
+            title="Investigation catalog"
+            description="The trainee writes a request; the LLM routes it among only currently eligible public definitions."
+            addLabel="Add investigation"
+            onAdd={() => {
+              if (!document.roles[0] || !document.findings[0]) return;
+              const investigation: InvestigationDefinition = {
+                id: nextId("I", document.investigations.map((item) => item.id)),
+                label: "New investigation",
+                performer_roles: [document.roles[0].id],
+                request_description: "Describe what this investigation determines.",
+                match_hints: ["example trainee phrasing"],
+                prerequisites: { all_evidence: [], any_evidence: [] },
+                duration_minutes: 5,
+                repeatable: false,
+              };
+              onChange({
+                ...document,
+                investigations: [...document.investigations, investigation],
+                variants: document.variants.map((variant) => ({
+                  ...variant,
+                  investigation_outcomes: [
+                    ...variant.investigation_outcomes,
+                    {
+                      investigation_id: investigation.id,
+                      reveal_findings: [document.findings[0].id],
+                    },
+                  ],
+                })),
+              });
+            }}
+          />
+          {!document.findings[0] && (
+            <p className="editor-warning">Create at least one finding before adding an investigation.</p>
+          )}
+          <div className="form-card-list">
+            {document.investigations.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.id} - {item.label}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
+                    ...document,
+                    investigations: removeAt(document.investigations, index),
+                    variants: document.variants.map((variant) => ({
+                      ...variant,
+                      investigation_outcomes: variant.investigation_outcomes.filter(
+                        (outcome) => outcome.investigation_id !== item.id,
+                      ),
+                    })),
+                  })}>Remove</button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => {
+                    onChange({
+                      ...document,
+                      investigations: replaceAt(document.investigations, index, {
+                        ...item,
+                        id: value,
+                      }),
+                      variants: document.variants.map((variant) => ({
+                        ...variant,
+                        investigation_outcomes: variant.investigation_outcomes.map((outcome) => ({
+                          ...outcome,
+                          investigation_id: outcome.investigation_id === item.id
+                            ? value
+                            : outcome.investigation_id,
+                        })),
+                      })),
+                    });
+                  }} />
+                  <Field label="Label" value={item.label} onChange={(value) => updateInvestigation(index, { ...item, label: value })} />
+                  <Field
+                    label="Duration (minutes)"
+                    type="number"
+                    value={item.duration_minutes}
+                    onChange={(value) => updateInvestigation(index, {
+                      ...item,
+                      duration_minutes: Math.max(0, Number(value)),
+                    })}
+                  />
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={item.repeatable}
+                      onChange={(event) => updateInvestigation(index, {
+                        ...item,
+                        repeatable: event.target.checked,
+                      })}
+                    />
+                    Repeatable
+                  </label>
+                  <TextField
+                    label="Public request description"
+                    value={item.request_description}
+                    onChange={(value) => updateInvestigation(index, {
+                      ...item,
+                      request_description: value,
+                    })}
+                  />
+                  <TextField
+                    label="Example matching phrases (one per line)"
+                    value={item.match_hints.join("\n")}
+                    onChange={(value) => updateInvestigation(index, {
+                      ...item,
+                      match_hints: lines(value),
+                    })}
+                    help="Use natural phrases a trainee might type; do not include the finding or answer."
+                  />
+                  <MultiSelect
+                    label="Performer roles"
+                    options={roles}
+                    selected={item.performer_roles}
+                    onChange={(selected) => updateInvestigation(index, {
+                      ...item,
+                      performer_roles: selected,
+                    })}
+                    empty="Create roles first."
+                  />
+                  <MultiSelect
+                    label="Required evidence (all)"
+                    options={evidence}
+                    selected={item.prerequisites.all_evidence}
+                    onChange={(selected) => updateInvestigation(index, {
+                      ...item,
+                      prerequisites: { ...item.prerequisites, all_evidence: selected },
+                    })}
+                    empty="Create evidence first."
+                  />
+                  <MultiSelect
+                    label="Required evidence (at least one)"
+                    options={evidence}
+                    selected={item.prerequisites.any_evidence}
+                    onChange={(selected) => updateInvestigation(index, {
+                      ...item,
+                      prerequisites: { ...item.prerequisites, any_evidence: selected },
+                    })}
+                    empty="Create evidence first."
+                  />
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
 
       {section === "timeline" && (
-        <div className="form-section">
-          <SectionHeading
-            title="Timeline events"
-            description="Choose when each role learns one or more facts."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => onChange({
-                  ...document,
-                  timeline: [
-                    ...document.timeline,
-                    {
-                      id: uniqueId("E", document.timeline.map((item) => item.id)),
-                      at_minute: 0,
-                      type: "knowledge_grant",
-                      role: document.roles[0]?.id ?? "",
-                      fact_ids: document.facts[0] ? [document.facts[0].id] : [],
-                    },
-                  ],
-                })}
-              >
-                Add event
-              </button>
-            )}
+        <section className="form-section">
+          <Heading
+            title="Observation timeline"
+            description="Schedule when a role receives one or more ambiguous observations."
+            addLabel="Add event"
+            onAdd={() => {
+              if (!document.roles[0] || !document.observations[0]) return;
+              onChange({
+                ...document,
+                timeline: [
+                  ...document.timeline,
+                  {
+                    id: nextId("E", document.timeline.map((item) => item.id)),
+                    at_minute: 0,
+                    type: "observation_grant",
+                    role: document.roles[0].id,
+                    observation_ids: [document.observations[0].id],
+                  },
+                ],
+              });
+            }}
           />
           <div className="form-card-list">
-            {document.timeline.map((event, index) => (
-              <div className="form-card" key={`${event.id}-${index}`}>
-                <CardHeading
-                  title={`${event.id || "Event"} · T+${event.at_minute}`}
-                  onRemove={() => onChange({
+            {document.timeline.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.id} at T+{item.at_minute}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
                     ...document,
                     timeline: removeAt(document.timeline, index),
-                  })}
-                />
+                  })}>Remove</button>
+                </div>
                 <div className="form-grid">
-                  <label>
-                    Event ID
-                    <input
-                      type="text"
-                      value={event.id}
-                      onChange={(change) => renameEvent(index, change.target.value)}
-                    />
-                  </label>
-                  <label>
-                    At minute
-                    <input
-                      type="number"
-                      min={0}
-                      value={event.at_minute}
-                      onChange={(change) => onChange({
-                        ...document,
-                        timeline: updateAt(document.timeline, index, {
-                          ...event,
-                          at_minute: Number(change.target.value),
-                        }),
-                      })}
-                    />
-                  </label>
+                  <Field label="ID" value={item.id} onChange={(value) => onChange({
+                    ...document,
+                    timeline: replaceAt(document.timeline, index, { ...item, id: value }),
+                    variants: document.variants.map((variant) => ({
+                      ...variant,
+                      timeline_overrides: variant.timeline_overrides.map((override) => ({
+                        ...override,
+                        event_id: override.event_id === item.id ? value : override.event_id,
+                      })),
+                    })),
+                  })} />
+                  <Field label="Minute" type="number" value={item.at_minute} onChange={(value) => onChange({
+                    ...document,
+                    timeline: replaceAt(document.timeline, index, {
+                      ...item,
+                      at_minute: Math.max(0, Number(value)),
+                    }),
+                  })} />
                   <label>
                     Recipient role
-                    <select
-                      value={event.role}
-                      onChange={(change) => onChange({
-                        ...document,
-                        timeline: updateAt(document.timeline, index, {
-                          ...event,
-                          role: change.target.value,
-                        }),
-                      })}
-                    >
-                      <option value="">Select a role</option>
-                      {roleOptions.map((option) => (
-                        <option value={option.id} key={option.id}>{option.label}</option>
-                      ))}
+                    <select value={item.role} onChange={(event) => onChange({
+                      ...document,
+                      timeline: replaceAt(document.timeline, index, { ...item, role: event.target.value }),
+                    })}>
+                      {roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}
                     </select>
                   </label>
-                  <div className="field-group wide-field">
-                    <span className="field-label">Facts revealed</span>
-                    <ReferenceChecklist
-                      options={factOptions}
-                      selected={event.fact_ids}
-                      emptyText="Create facts before assigning them to the timeline."
-                      onChange={(factIds) => onChange({
-                        ...document,
-                        timeline: updateAt(document.timeline, index, {
-                          ...event,
-                          fact_ids: factIds,
-                        }),
-                      })}
-                    />
-                  </div>
+                  <MultiSelect
+                    label="Observations revealed"
+                    options={observations}
+                    selected={item.observation_ids}
+                    onChange={(selected) => onChange({
+                      ...document,
+                      timeline: replaceAt(document.timeline, index, {
+                        ...item,
+                        observation_ids: selected,
+                      }),
+                    })}
+                    empty="Create observations first."
+                  />
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {section === "variants" && (
-        <div className="form-section">
-          <SectionHeading
-            title="Scenario variants"
-            description="Hidden ground truth and per-track fact or timeline differences."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => onChange({
-                  ...document,
-                  variants: [
-                    ...document.variants,
-                    {
-                      id: uniqueId("track", document.variants.map((item) => item.id)),
-                      name: "New track",
-                      ground_truth: {},
-                      fact_overrides: [],
-                      timeline_overrides: [],
-                    },
-                  ],
-                })}
-              >
-                Add variant
-              </button>
-            )}
+        <section className="form-section">
+          <Heading
+            title="Variant outcomes"
+            description="Keep truth hidden. Map every investigation to deterministic findings for each variant."
+            addLabel="Add variant"
+            onAdd={() => {
+              if (!document.findings[0]) return;
+              const id = nextKey("variant", document.variants.map((item) => item.id));
+              onChange({
+                ...document,
+                variants: [
+                  ...document.variants,
+                  {
+                    id,
+                    name: "New variant",
+                    ground_truth: {},
+                    observation_overrides: [],
+                    timeline_overrides: [],
+                    investigation_outcomes: document.investigations.map((item) => ({
+                      investigation_id: item.id,
+                      reveal_findings: [document.findings[0].id],
+                    })),
+                  },
+                ],
+              });
+            }}
           />
+          {!document.findings[0] && (
+            <p className="editor-warning">Create at least one finding before adding a variant.</p>
+          )}
           <div className="form-card-list">
             {document.variants.map((variant, variantIndex) => (
-              <div className="form-card variant-card" key={`${variant.id}-${variantIndex}`}>
-                <CardHeading
-                  title={variant.name || `Variant ${variantIndex + 1}`}
-                  onRemove={() => onChange({
+              <article className="form-card variant-card" key={variant.id}>
+                <div className="form-card-heading">
+                  <strong>{variant.name}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
                     ...document,
                     variants: removeAt(document.variants, variantIndex),
-                  })}
-                />
-                <div className="form-grid">
-                  <label>
-                    Variant ID
-                    <input
-                      type="text"
-                      value={variant.id}
-                      onChange={(event) => updateVariant(variantIndex, {
-                        ...variant,
-                        id: event.target.value,
-                      })}
-                    />
-                  </label>
-                  <label>
-                    Display name
-                    <input
-                      type="text"
-                      value={variant.name}
-                      onChange={(event) => updateVariant(variantIndex, {
-                        ...variant,
-                        name: event.target.value,
-                      })}
-                    />
-                  </label>
+                  })}>Remove</button>
                 </div>
-
-                <GroundTruthEditor
-                  value={variant.ground_truth}
-                  onChange={(groundTruth) => updateVariant(variantIndex, {
-                    ...variant,
-                    ground_truth: groundTruth,
-                  })}
-                />
-
+                <div className="form-grid">
+                  <Field label="ID" value={variant.id} onChange={(value) => onChange({
+                    ...document,
+                    variants: replaceAt(document.variants, variantIndex, { ...variant, id: value }),
+                  })} />
+                  <Field label="Name" value={variant.name} onChange={(value) => onChange({
+                    ...document,
+                    variants: replaceAt(document.variants, variantIndex, { ...variant, name: value }),
+                  })} />
+                </div>
                 <div className="nested-editor">
                   <div className="nested-heading">
                     <div>
-                      <strong>Fact overrides</strong>
-                      <small>Change a fact statement or confidence only for this variant.</small>
+                      <strong>Hidden ground truth</strong>
+                      <small>Used by the simulator only; never sent to an LLM.</small>
                     </div>
-                    <button
-                      type="button"
-                      className="secondary-button small-button"
-                      onClick={() => updateVariant(variantIndex, {
-                        ...variant,
-                        fact_overrides: [
-                          ...variant.fact_overrides,
-                          {
-                            fact_id: document.facts[0]?.id ?? "",
-                            statement: null,
-                            confidence: null,
-                          },
-                        ],
-                      })}
-                    >
-                      Add fact override
-                    </button>
-                  </div>
-                  {variant.fact_overrides.map((override, overrideIndex) => (
-                    <div className="nested-card" key={`${override.fact_id}-${overrideIndex}`}>
-                      <div className="form-grid">
-                        <label>
-                          Fact
-                          <select
-                            value={override.fact_id}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              fact_overrides: updateAt(
-                                variant.fact_overrides,
-                                overrideIndex,
-                                { ...override, fact_id: event.target.value },
-                              ),
-                            })}
-                          >
-                            <option value="">Select a fact</option>
-                            {factOptions.map((option) => (
-                              <option value={option.id} key={option.id}>{option.label}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Confidence override
-                          <select
-                            value={override.confidence ?? ""}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              fact_overrides: updateAt(
-                                variant.fact_overrides,
-                                overrideIndex,
-                                {
-                                  ...override,
-                                  confidence: (event.target.value || null) as Confidence | null,
-                                },
-                              ),
-                            })}
-                          >
-                            <option value="">Keep original</option>
-                            {CONFIDENCE_LEVELS.map((level) => (
-                              <option value={level} key={level}>{level}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="wide-field">
-                          Statement override
-                          <textarea
-                            rows={2}
-                            placeholder="Leave blank to keep the original statement."
-                            value={override.statement ?? ""}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              fact_overrides: updateAt(
-                                variant.fact_overrides,
-                                overrideIndex,
-                                { ...override, statement: event.target.value || null },
-                              ),
-                            })}
-                          />
-                        </label>
-                      </div>
-                      <button
-                        type="button"
-                        className="danger-button small-button"
-                        onClick={() => updateVariant(variantIndex, {
+                    <button type="button" className="small-button secondary-button" onClick={() => {
+                      const key = nextKey("truth", Object.keys(variant.ground_truth));
+                      onChange({
+                        ...document,
+                        variants: replaceAt(document.variants, variantIndex, {
                           ...variant,
-                          fact_overrides: removeAt(
-                            variant.fact_overrides,
-                            overrideIndex,
-                          ),
-                        })}
-                      >
-                        Remove override
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="nested-editor">
-                  <div className="nested-heading">
-                    <div>
-                      <strong>Timeline overrides</strong>
-                      <small>Move, redirect, change, or disable a base timeline event.</small>
-                    </div>
-                    <button
-                      type="button"
-                      className="secondary-button small-button"
-                      onClick={() => updateVariant(variantIndex, {
-                        ...variant,
-                        timeline_overrides: [
-                          ...variant.timeline_overrides,
-                          {
-                            event_id: document.timeline[0]?.id ?? "",
-                            at_minute: null,
-                            role: null,
-                            fact_ids: null,
-                            enabled: true,
-                          },
-                        ],
-                      })}
-                    >
-                      Add timeline override
-                    </button>
+                          ground_truth: { ...variant.ground_truth, [key]: false },
+                        }),
+                      });
+                    }}>Add truth field</button>
                   </div>
-                  {variant.timeline_overrides.map((override, overrideIndex) => (
-                    <div className="nested-card" key={`${override.event_id}-${overrideIndex}`}>
-                      <div className="form-grid">
-                        <label>
-                          Base event
-                          <select
-                            value={override.event_id}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              timeline_overrides: updateAt(
-                                variant.timeline_overrides,
-                                overrideIndex,
-                                { ...override, event_id: event.target.value },
-                              ),
-                            })}
-                          >
-                            <option value="">Select an event</option>
-                            {eventOptions.map((option) => (
-                              <option value={option.id} key={option.id}>{option.label}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Minute override
-                          <input
-                            type="number"
-                            min={0}
-                            placeholder="Keep original"
-                            value={override.at_minute ?? ""}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              timeline_overrides: updateAt(
-                                variant.timeline_overrides,
-                                overrideIndex,
-                                {
-                                  ...override,
-                                  at_minute: event.target.value === ""
-                                    ? null
-                                    : Number(event.target.value),
-                                },
-                              ),
-                            })}
-                          />
-                        </label>
-                        <label>
-                          Role override
-                          <select
-                            value={override.role ?? ""}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              timeline_overrides: updateAt(
-                                variant.timeline_overrides,
-                                overrideIndex,
-                                { ...override, role: event.target.value || null },
-                              ),
-                            })}
-                          >
-                            <option value="">Keep original</option>
-                            {roleOptions.map((option) => (
-                              <option value={option.id} key={option.id}>{option.label}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="check-field">
-                          <input
-                            type="checkbox"
-                            checked={override.enabled}
-                            onChange={(event) => updateVariant(variantIndex, {
-                              ...variant,
-                              timeline_overrides: updateAt(
-                                variant.timeline_overrides,
-                                overrideIndex,
-                                { ...override, enabled: event.target.checked },
-                              ),
-                            })}
-                          />
-                          Event enabled
-                        </label>
-                        <div className="field-group wide-field">
-                          <span className="field-label">Fact override</span>
-                          <span className="field-help">No selection keeps the base facts.</span>
-                          <ReferenceChecklist
-                            options={factOptions}
-                            selected={override.fact_ids ?? []}
-                            emptyText="Create facts before overriding this event."
-                            onChange={(factIds) => updateVariant(variantIndex, {
-                              ...variant,
-                              timeline_overrides: updateAt(
-                                variant.timeline_overrides,
-                                overrideIndex,
-                                {
-                                  ...override,
-                                  fact_ids: factIds.length > 0 ? factIds : null,
-                                },
-                              ),
-                            })}
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="danger-button small-button"
-                        onClick={() => updateVariant(variantIndex, {
-                          ...variant,
-                          timeline_overrides: removeAt(
-                            variant.timeline_overrides,
-                            overrideIndex,
-                          ),
-                        })}
-                      >
-                        Remove override
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {section === "scoring" && (
-        <div className="form-section">
-          <SectionHeading
-            title="Scoring rules"
-            description="Deterministic criteria evaluated from the exercise event log."
-            action={(
-              <button
-                type="button"
-                className="secondary-button small-button"
-                onClick={() => {
-                  const base: ScoringRule = {
-                    id: uniqueId("rule", document.scoring_rules.map((item) => item.id)),
-                    description: "Describe the expected response.",
-                    type: "decision_within",
-                    points: 10,
-                    within_minutes: null,
-                    trigger_fact: null,
-                    target_role: null,
-                    fact_id: null,
-                    decision_category: null,
-                    conclusion_confidence: null,
-                    confirmation_fact: null,
-                  };
-                  onChange({
-                    ...document,
-                    scoring_rules: [
-                      ...document.scoring_rules,
-                      ruleWithType(base, "decision_within", document),
-                    ],
-                  });
-                }}
-              >
-                Add rule
-              </button>
-            )}
-          />
-          <div className="form-card-list">
-            {document.scoring_rules.map((rule, index) => (
-              <div className="form-card" key={`${rule.id}-${index}`}>
-                <CardHeading
-                  title={rule.description || `Rule ${index + 1}`}
-                  onRemove={() => onChange({
-                    ...document,
-                    scoring_rules: removeAt(document.scoring_rules, index),
-                  })}
-                />
-                <div className="form-grid">
-                  <label>
-                    Rule ID
-                    <input
-                      type="text"
-                      value={rule.id}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scoring_rules: updateAt(document.scoring_rules, index, {
-                          ...rule,
-                          id: event.target.value,
-                        }),
-                      })}
-                    />
-                  </label>
-                  <label>
-                    Rule type
-                    <select
-                      value={rule.type}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scoring_rules: updateAt(
-                          document.scoring_rules,
-                          index,
-                          ruleWithType(rule, event.target.value as ScoringRuleType, document),
-                        ),
-                      })}
-                    >
-                      {RULE_TYPES.map((type) => (
-                        <option value={type.id} key={type.id}>{type.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Points
-                    <input
-                      type="number"
-                      min={1}
-                      value={rule.points}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scoring_rules: updateAt(document.scoring_rules, index, {
-                          ...rule,
-                          points: Number(event.target.value),
-                        }),
-                      })}
-                    />
-                  </label>
-                  <label className="wide-field">
-                    Description
-                    <textarea
-                      rows={2}
-                      value={rule.description}
-                      onChange={(event) => onChange({
-                        ...document,
-                        scoring_rules: updateAt(document.scoring_rules, index, {
-                          ...rule,
-                          description: event.target.value,
-                        }),
-                      })}
-                    />
-                  </label>
-
-                  {rule.type !== "avoid_premature_conclusion" && (
-                    <label>
-                      Trigger fact
-                      <select
-                        value={rule.trigger_fact ?? ""}
-                        onChange={(event) => onChange({
-                          ...document,
-                          scoring_rules: updateAt(document.scoring_rules, index, {
-                            ...rule,
-                            trigger_fact: event.target.value || null,
-                          }),
-                        })}
-                      >
-                        <option value="">Select a fact</option>
-                        {factOptions.map((option) => (
-                          <option value={option.id} key={option.id}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  {(rule.type === "role_contacted_within" || rule.type === "fact_shared_within") && (
-                    <label>
-                      Target role
-                      <select
-                        value={rule.target_role ?? ""}
-                        onChange={(event) => onChange({
-                          ...document,
-                          scoring_rules: updateAt(document.scoring_rules, index, {
-                            ...rule,
-                            target_role: event.target.value || null,
-                          }),
-                        })}
-                      >
-                        <option value="">Select a role</option>
-                        {roleOptions.map((option) => (
-                          <option value={option.id} key={option.id}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  {rule.type === "fact_shared_within" && (
-                    <label>
-                      Fact that must be shared
-                      <select
-                        value={rule.fact_id ?? ""}
-                        onChange={(event) => onChange({
-                          ...document,
-                          scoring_rules: updateAt(document.scoring_rules, index, {
-                            ...rule,
-                            fact_id: event.target.value || null,
-                          }),
-                        })}
-                      >
-                        <option value="">Select a fact</option>
-                        {factOptions.map((option) => (
-                          <option value={option.id} key={option.id}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  {(rule.type === "decision_within" || rule.type === "avoid_premature_conclusion") && (
-                    <label>
-                      Decision category
-                      <select
-                        value={rule.decision_category ?? ""}
-                        onChange={(event) => onChange({
-                          ...document,
-                          scoring_rules: updateAt(document.scoring_rules, index, {
-                            ...rule,
-                            decision_category: event.target.value || null,
-                          }),
-                        })}
-                      >
-                        <option value="">Select a category</option>
-                        {categoryOptions.map((option) => (
-                          <option value={option.id} key={option.id}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  {rule.type !== "avoid_premature_conclusion" && (
-                    <label>
-                      Complete within minutes
+                  {Object.entries(variant.ground_truth).map(([key, value]) => (
+                    <div className="key-value-row" key={key}>
                       <input
-                        type="number"
-                        min={1}
-                        value={rule.within_minutes ?? ""}
+                        type="text"
+                        aria-label="Truth key"
+                        value={key}
+                        onChange={(event) => {
+                          const entries = Object.entries(variant.ground_truth).map(
+                            ([currentKey, currentValue]) => [
+                              currentKey === key ? event.target.value : currentKey,
+                              currentValue,
+                            ],
+                          );
+                          onChange({
+                            ...document,
+                            variants: replaceAt(document.variants, variantIndex, {
+                              ...variant,
+                              ground_truth: Object.fromEntries(entries),
+                            }),
+                          });
+                        }}
+                      />
+                      <input
+                        type="text"
+                        aria-label={`Value for ${key}`}
+                        value={String(value)}
                         onChange={(event) => onChange({
                           ...document,
-                          scoring_rules: updateAt(document.scoring_rules, index, {
-                            ...rule,
-                            within_minutes: event.target.value === ""
-                              ? null
-                              : Number(event.target.value),
+                          variants: replaceAt(document.variants, variantIndex, {
+                            ...variant,
+                            ground_truth: {
+                              ...variant.ground_truth,
+                              [key]: scalar(event.target.value),
+                            },
                           }),
                         })}
                       />
-                    </label>
-                  )}
+                      <button type="button" className="danger-button" onClick={() => {
+                        const next = { ...variant.ground_truth };
+                        delete next[key];
+                        onChange({
+                          ...document,
+                          variants: replaceAt(document.variants, variantIndex, {
+                            ...variant,
+                            ground_truth: next,
+                          }),
+                        });
+                      }}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="nested-editor">
+                  <div className="nested-heading">
+                    <div>
+                      <strong>Investigation outcomes</strong>
+                      <small>These findings remain hidden until each investigation completes.</small>
+                    </div>
+                  </div>
+                  {document.investigations.map((investigation) => {
+                    const outcomeIndex = variant.investigation_outcomes.findIndex(
+                      (item) => item.investigation_id === investigation.id,
+                    );
+                    const selected = outcomeIndex >= 0
+                      ? variant.investigation_outcomes[outcomeIndex].reveal_findings
+                      : [];
+                    return (
+                      <div className="nested-card" key={investigation.id}>
+                        <strong>{investigation.id} - {investigation.label}</strong>
+                        <MultiSelect
+                          label="Findings revealed"
+                          options={findings}
+                          selected={selected}
+                          onChange={(findingIds) => {
+                            const outcome = {
+                              investigation_id: investigation.id,
+                              reveal_findings: findingIds,
+                            };
+                            const outcomes = outcomeIndex >= 0
+                              ? replaceAt(variant.investigation_outcomes, outcomeIndex, outcome)
+                              : [...variant.investigation_outcomes, outcome];
+                            onChange({
+                              ...document,
+                              variants: replaceAt(document.variants, variantIndex, {
+                                ...variant,
+                                investigation_outcomes: outcomes,
+                              }),
+                            });
+                          }}
+                          empty="Create findings first."
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
-                  {rule.type === "avoid_premature_conclusion" && (
+      {section === "scoring" && (
+        <section className="form-section">
+          <Heading
+            title="Minimal scoring rules"
+            description="Score process and premature confidence without exposing the hidden outcome."
+            addLabel="Add rule"
+            onAdd={() => onChange({
+              ...document,
+              scoring_rules: [
+                ...document.scoring_rules,
+                {
+                  id: nextKey("rule", document.scoring_rules.map((item) => item.id)),
+                  description: "Describe the expected behavior.",
+                  type: "decision_within",
+                  points: 10,
+                  within_minutes: 15,
+                  trigger_evidence: document.observations[0]?.id ?? null,
+                  target_role: null,
+                  evidence_id: null,
+                  decision_category: categories[0]?.id ?? null,
+                  hypothesis_id: null,
+                  conclusion_confidence: null,
+                  confirmation_evidence: null,
+                },
+              ],
+            })}
+          />
+          <div className="form-card-list">
+            {document.scoring_rules.map((item, index) => (
+              <article className="form-card" key={`${item.id}-${index}`}>
+                <div className="form-card-heading">
+                  <strong>{item.id}</strong>
+                  <button type="button" className="danger-button" onClick={() => onChange({
+                    ...document,
+                    scoring_rules: removeAt(document.scoring_rules, index),
+                  })}>Remove</button>
+                </div>
+                <div className="form-grid">
+                  <Field label="ID" value={item.id} onChange={(value) => updateScoring(index, { ...item, id: value })} />
+                  <Field label="Points" type="number" value={item.points} onChange={(value) => updateScoring(index, {
+                    ...item,
+                    points: Math.max(1, Number(value)),
+                  })} />
+                  <TextField label="Description" value={item.description} onChange={(value) => updateScoring(index, { ...item, description: value })} />
+                  <label>
+                    Rule type
+                    <select value={item.type} onChange={(event) => updateScoring(index, {
+                      ...item,
+                      type: event.target.value as ScoringRuleType,
+                    })}>
+                      {scoringTypes.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}
+                    </select>
+                  </label>
+                  {item.type !== "avoid_premature_assessment" && (
                     <>
                       <label>
-                        Premature confidence
-                        <select
-                          value={rule.conclusion_confidence ?? ""}
-                          onChange={(event) => onChange({
-                            ...document,
-                            scoring_rules: updateAt(document.scoring_rules, index, {
-                              ...rule,
-                              conclusion_confidence: (event.target.value || null) as Confidence | null,
-                            }),
-                          })}
-                        >
-                          <option value="">Select confidence</option>
-                          {CONFIDENCE_LEVELS.map((level) => (
-                            <option value={level} key={level}>{level}</option>
-                          ))}
+                        Trigger evidence
+                        <select value={item.trigger_evidence ?? ""} onChange={(event) => updateScoring(index, {
+                          ...item,
+                          trigger_evidence: event.target.value || null,
+                        })}>
+                          <option value="">Select evidence</option>
+                          {evidence.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </select>
+                      </label>
+                      <Field label="Within minutes" type="number" value={item.within_minutes ?? 1} onChange={(value) => updateScoring(index, {
+                        ...item,
+                        within_minutes: Math.max(1, Number(value)),
+                      })} />
+                    </>
+                  )}
+                  {(item.type === "role_contacted_within" || item.type === "evidence_shared_within") && (
+                    <label>
+                      Target role
+                      <select value={item.target_role ?? ""} onChange={(event) => updateScoring(index, {
+                        ...item,
+                        target_role: event.target.value || null,
+                      })}>
+                        <option value="">Select role</option>
+                        {roles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {item.type === "evidence_shared_within" && (
+                    <label>
+                      Evidence to share
+                      <select value={item.evidence_id ?? ""} onChange={(event) => updateScoring(index, {
+                        ...item,
+                        evidence_id: event.target.value || null,
+                      })}>
+                        <option value="">Select evidence</option>
+                        {evidence.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {item.type === "decision_within" && (
+                    <label>
+                      Decision category
+                      <select value={item.decision_category ?? ""} onChange={(event) => updateScoring(index, {
+                        ...item,
+                        decision_category: event.target.value || null,
+                      })}>
+                        <option value="">Select category</option>
+                        {categories.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {item.type === "avoid_premature_assessment" && (
+                    <>
+                      <label>
+                        Hypothesis
+                        <select value={item.hypothesis_id ?? ""} onChange={(event) => updateScoring(index, {
+                          ...item,
+                          hypothesis_id: event.target.value || null,
+                        })}>
+                          <option value="">Select hypothesis</option>
+                          {hypotheses.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                         </select>
                       </label>
                       <label>
-                        Confirmation fact
-                        <select
-                          value={rule.confirmation_fact ?? ""}
-                          onChange={(event) => onChange({
-                            ...document,
-                            scoring_rules: updateAt(document.scoring_rules, index, {
-                              ...rule,
-                              confirmation_fact: event.target.value || null,
-                            }),
-                          })}
-                        >
-                          <option value="">Select a fact</option>
-                          {factOptions.map((option) => (
-                            <option value={option.id} key={option.id}>{option.label}</option>
-                          ))}
+                        Confidence to guard
+                        <select value={item.conclusion_confidence ?? ""} onChange={(event) => updateScoring(index, {
+                          ...item,
+                          conclusion_confidence: (event.target.value || null) as Confidence | null,
+                        })}>
+                          <option value="">Select confidence</option>
+                          {confidenceOptions.map((value) => <option key={value}>{value}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        Confirmation evidence
+                        <select value={item.confirmation_evidence ?? ""} onChange={(event) => updateScoring(index, {
+                          ...item,
+                          confirmation_evidence: event.target.value || null,
+                        })}>
+                          <option value="">Select evidence</option>
+                          {evidence.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                         </select>
                       </label>
                     </>
                   )}
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

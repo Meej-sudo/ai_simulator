@@ -3,8 +3,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.scenarios.models import CommunicationStyle, CompiledScenario, Confidence
-from app.domain.simulation.models import EventType, SessionStatus
+from app.domain.scenarios.models import (
+    CommunicationStyle,
+    CompiledScenario,
+    Confidence,
+    Reliability,
+)
+from app.domain.simulation.models import (
+    AssessmentProjection,
+    AssessmentSnapshot,
+    EventType,
+    InvestigationRun,
+    SessionStatus,
+)
 from app.llm.models import ResponseCertainty
 
 
@@ -37,14 +48,42 @@ class AskRoleRequest(BaseModel):
 
 class AskRoleResponse(BaseModel):
     message: str
-    referenced_fact_ids: list[str]
+    referenced_evidence_ids: list[str]
     certainty: ResponseCertainty
+
+
+class ShareEvidenceRequest(BaseModel):
+    from_role: str
+    to_role: str
+    evidence_id: str
 
 
 class ShareFactRequest(BaseModel):
     from_role: str
     to_role: str
     fact_id: str
+
+
+class InvestigationRequest(BaseModel):
+    requester_role: str
+    performer_role: str
+    request: str = Field(min_length=1, max_length=4000)
+
+
+class InvestigationRequestResponse(BaseModel):
+    accepted: bool
+    reason: str
+    investigation: InvestigationRun | None = None
+
+
+class AssessmentRequest(BaseModel):
+    actor_role: str
+    statement: str = Field(min_length=1, max_length=4000)
+
+
+class AssessmentSubmissionResponse(BaseModel):
+    recorded: list[AssessmentSnapshot]
+    message: str
 
 
 class DecisionRequest(BaseModel):
@@ -60,17 +99,24 @@ class ActionAcceptedResponse(BaseModel):
     simulation_time: int
 
 
-class FactResponse(BaseModel):
+class ObservationResponse(BaseModel):
     id: str
-    type: str
+    source: str
     statement: str
-    confidence: Confidence
+    reliability: Reliability
+
+
+class FindingResponse(BaseModel):
+    id: str
+    statement: str
+    reliability: Reliability
 
 
 class KnowledgeResponse(BaseModel):
     role_id: str
     simulation_time: int
-    facts: list[FactResponse]
+    observations: list[ObservationResponse]
+    findings: list[FindingResponse]
 
 
 class RoleResponse(BaseModel):
@@ -78,6 +124,19 @@ class RoleResponse(BaseModel):
     display_name: str
     responsibilities: list[str]
     communication_style: CommunicationStyle
+
+
+class ExternalEntityResponse(BaseModel):
+    id: str
+    display_name: str
+    type: str
+    accepts: list[str]
+
+
+class HypothesisResponse(BaseModel):
+    id: str
+    key: str
+    label: str
 
 
 class VariantResponse(BaseModel):
@@ -103,10 +162,12 @@ class ScenarioSummaryResponse(BaseModel):
 
 class ScenarioDetailResponse(ScenarioSummaryResponse):
     roles: list[RoleResponse]
+    external_entities: list[ExternalEntityResponse]
+    hypotheses: list[HypothesisResponse]
 
 
 class ScenarioSourcesUpdateRequest(BaseModel):
-    files: dict[str, str] = Field(min_length=6, max_length=6)
+    files: dict[str, str] = Field(min_length=9, max_length=9)
 
     @field_validator("files")
     @classmethod

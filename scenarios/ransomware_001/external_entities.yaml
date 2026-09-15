@@ -1,0 +1,19 @@
+external_entities:
+  - id: slovenian_dpa
+    display_name: Informacijski pooblaščenec
+    type: supervisory_authority
+    accepts:
+      - regulatory_notification
+      - supplementary_notification
+
+  - id: police
+    display_name: Police
+    type: law_enforcement
+    accepts:
+      - incident_report
+
+  - id: press
+    display_name: Media
+    type: media
+    accepts:
+      - press_statement

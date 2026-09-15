@@ -3,31 +3,50 @@ variants:
     name: Track Alpha
     ground_truth:
       ransomware_intrusion: true
+      credential_compromise: true
       data_exfiltration: true
+      legitimate_backup_transfer: false
       outbound_traffic_cause: attacker_transfer
-    fact_overrides: []
-    timeline_overrides:
-      - event_id: E006
-        enabled: false
+    observation_overrides: []
+    timeline_overrides: []
+    investigation_outcomes:
+      - investigation_id: I001
+        reveal_findings: [FD001]
+      - investigation_id: I002
+        reveal_findings: [FD002]
+      - investigation_id: I003
+        reveal_findings: [FD003]
+      - investigation_id: I004
+        reveal_findings: [FD004]
+      - investigation_id: I005
+        reveal_findings: [FD005]
+      - investigation_id: I006
+        reveal_findings: [FD006]
+      - investigation_id: I007
+        reveal_findings: [FD008, FD009]
 
   - id: track_bravo
     name: Track Bravo
     ground_truth:
       ransomware_intrusion: true
+      credential_compromise: true
       data_exfiltration: false
+      legitimate_backup_transfer: true
       outbound_traffic_cause: approved_backup
-    fact_overrides:
-      - fact_id: F003
-        statement: The outbound traffic creates a preliminary concern about possible data exfiltration.
-        confidence: low
-      - fact_id: F004
-        statement: Outbound traffic was observed from an affected server, but its destination is not yet classified.
-        confidence: medium
-      - fact_id: F006
-        statement: The outbound traffic is confirmed to be an approved backup transfer.
-        confidence: confirmed
-    timeline_overrides:
-      - event_id: E006
-        at_minute: 55
-      - event_id: E007
-        enabled: false
+    observation_overrides: []
+    timeline_overrides: []
+    investigation_outcomes:
+      - investigation_id: I001
+        reveal_findings: [FD001]
+      - investigation_id: I002
+        reveal_findings: [FD002]
+      - investigation_id: I003
+        reveal_findings: [FD003]
+      - investigation_id: I004
+        reveal_findings: [FD010]
+      - investigation_id: I005
+        reveal_findings: [FD011]
+      - investigation_id: I006
+        reveal_findings: [FD012]
+      - investigation_id: I007
+        reveal_findings: [FD013]

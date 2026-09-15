@@ -164,7 +164,7 @@ blockquote { margin: 22px 0 0; padding: 18px; border-left: 2px solid var(--green
 .editor-actions .saved { color: var(--muted); }
 
 .scenario-form { display: grid; gap: 18px; }
-.form-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; padding: 1px; background: var(--line); }
+.form-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; padding: 1px; background: var(--line); }
 .form-tabs button { display: flex; justify-content: center; gap: 7px; min-width: 0; padding: 10px 6px; color: var(--muted); background: #09120e; border: 0; font-size: 9px; }
 .form-tabs button span { color: var(--green); }
 .form-tabs button.active { color: #04100a; background: var(--green); }
@@ -204,4 +204,56 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   .form-grid, .key-value-row, .reference-list { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
   .compact-button { align-self: stretch; }
+}
+
+.form-tabs { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+.action-notice { color: var(--amber); line-height: 1.45; letter-spacing: normal; text-transform: none; }
+.status-list, .assessment-list, .knowledge-list { display: grid; gap: 9px; }
+.status-list > p, .assessment-list > p { margin: 0; font-size: 13px; }
+.status-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid var(--line);
+  background: rgba(5, 12, 9, .48);
+}
+.status-list article div { display: grid; gap: 5px; }
+.status-list strong, .assessment-list strong, .knowledge-list strong { font-size: 12px; }
+.status-list small, .assessment-list small, .knowledge-list small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.status-list span, .status-list time, .assessment-list > article > span {
+  color: var(--amber);
+  font: 10px "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+.status-list span.completed { color: var(--green); }
+.assessment-list article {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(5, 12, 9, .48);
+}
+.assessment-list article div { display: grid; gap: 4px; }
+.assessment-list article p { grid-column: 1 / -1; margin: 0; font-size: 13px; }
+.assessment-list article > small { grid-column: 1 / -1; }
+.evidence-panel { padding: 26px; }
+.knowledge-list { margin-top: 18px; max-height: 580px; overflow: auto; }
+.knowledge-list > article { display: grid; gap: 8px; padding: 13px 0; border-top: 1px solid var(--line); }
+.knowledge-list > article > div { padding: 10px; border-left: 2px solid var(--line); background: rgba(5, 12, 9, .48); }
+.knowledge-list > article > div span {
+  color: var(--green);
+  font: 9px "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+.knowledge-list p { margin: 5px 0; font-size: 12px; line-height: 1.45; color: #cbd8d1; }
+
+@media (max-width: 800px) {
+  .form-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .status-list article { grid-template-columns: 1fr; }
 }

@@ -17,7 +17,7 @@ from app.services.scenario_registry import ScenarioRegistry
 SCENARIOS = Path(__file__).resolve().parents[2] / "scenarios"
 
 
-def test_http_session_workflow_includes_auditable_timestamps(tmp_path: Path):
+def make_app(tmp_path: Path, provider=None) -> FastAPI:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'api.sqlite3'}")
     Base.metadata.create_all(engine)
     database = Session(engine)
@@ -25,21 +25,33 @@ def test_http_session_workflow_includes_auditable_timestamps(tmp_path: Path):
     registry.load()
     app = FastAPI()
     app.state.scenarios = registry
-    app.state.llm_provider = FakeLLMProvider()
+    app.state.llm_provider = provider or FakeLLMProvider()
     app.include_router(router)
 
     def database_override():
         yield database
 
     app.dependency_overrides[get_db] = database_override
+    return app
 
-    with TestClient(app) as client:
+
+def test_http_sprint_one_discovery_workflow_and_leakage_boundaries(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
         catalog = client.get("/scenarios")
         assert catalog.status_code == 200
-        assert catalog.json()[0]["variants"][0]["id"] == "track_alpha"
         assert {
             item["id"] for item in catalog.json()[0]["decision_categories"]
         } == {"containment", "exfiltration", "notification"}
+
+        detail = client.get("/scenarios/ransomware_001")
+        assert detail.status_code == 200
+        assert {item["id"] for item in detail.json()["hypotheses"]} == {
+            "H001", "H002", "H003", "H004"
+        }
+        detail_text = detail.text
+        assert "ground_truth" not in detail_text
+        assert "investigation_outcomes" not in detail_text
+        assert "FD004" not in detail_text
 
         created = client.post(
             "/sessions",
@@ -52,35 +64,92 @@ def test_http_session_workflow_includes_auditable_timestamps(tmp_path: Path):
             f"/sessions/{session_id}/advance-time", json={"minutes": 45}
         ).status_code == 200
 
-        events = client.get(f"/sessions/{session_id}/events")
-        assert events.status_code == 200
-        assert all("created_at" in event for event in events.json())
+        soc_before = client.get(
+            f"/sessions/{session_id}/roles/soc/knowledge"
+        ).json()
+        assert {item["id"] for item in soc_before["observations"]} == {
+            "O001", "O002", "O003", "O004", "O005"
+        }
+        assert soc_before["findings"] == []
 
-        evaluation = client.get(f"/sessions/{session_id}/evaluation")
-        assert evaluation.status_code == 409
-
-        decision = client.post(
-            f"/sessions/{session_id}/actions/decision",
+        request = client.post(
+            f"/sessions/{session_id}/investigations",
             json={
-                "actor_role": "ciso",
-                "category": "notification",
-                "decision": "Brief the executive team.",
-                "rationale": "Leadership needs a shared operating picture.",
+                "requester_role": "ciso",
+                "performer_role": "soc",
+                "request": "Find where that outbound traffic went.",
             },
         )
-        assert decision.status_code == 200
+        assert request.status_code == 200
+        assert request.json()["accepted"] is True
+        assert request.json()["investigation"]["due_at"] == 50
+        assert "reveal_findings" not in request.text
+        assert "FD004" not in request.text
 
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 5})
+        runs = client.get(f"/sessions/{session_id}/investigations")
+        assert runs.status_code == 200
+        assert runs.json()[0]["status"] == "completed"
+        assert "FD004" not in runs.text
+
+        soc_after = client.get(
+            f"/sessions/{session_id}/roles/soc/knowledge"
+        ).json()
+        dpo_before_share = client.get(
+            f"/sessions/{session_id}/roles/dpo/knowledge"
+        ).json()
+        assert {item["id"] for item in soc_after["findings"]} == {"FD004"}
+        assert dpo_before_share["findings"] == []
+
+        events = client.get(f"/sessions/{session_id}/events")
+        assert events.status_code == 200
+        finding_events = [
+            event for event in events.json()
+            if event["event_type"] == "FINDING_REVEALED"
+        ]
+        assert finding_events[0]["payload"] == {"redacted": True}
+        assert "FD004" not in events.text
+
+        assessment = client.post(
+            f"/sessions/{session_id}/assessments",
+            json={
+                "actor_role": "soc",
+                "statement": "Data exfiltration is highly likely based on FD004.",
+            },
+        )
+        assert assessment.status_code == 200
+        assert assessment.json()["recorded"][0]["hypothesis_id"] == "H002"
+        assert "correct" not in assessment.text.casefold()
+
+        shared = client.post(
+            f"/sessions/{session_id}/actions/share-evidence",
+            json={
+                "from_role": "soc",
+                "to_role": "dpo",
+                "evidence_id": "FD004",
+            },
+        )
+        assert shared.status_code == 200
+        assert {
+            item["id"]
+            for item in client.get(
+                f"/sessions/{session_id}/roles/dpo/knowledge"
+            ).json()["findings"]
+        } == {"FD004"}
+
+        projection = client.get(f"/sessions/{session_id}/assessments")
+        assert projection.status_code == 200
+        assert len(projection.json()["history"]) == 1
+        assert len(projection.json()["current"]) == 1
+
+        assert client.get(f"/sessions/{session_id}/evaluation").status_code == 409
         completed = client.post(f"/sessions/{session_id}/complete")
-        assert completed.status_code == 200
         assert completed.json()["status"] == "completed"
-        evaluation = client.get(f"/sessions/{session_id}/evaluation")
-        assert evaluation.status_code == 200
-        assert "relevant_events" in evaluation.json()["rules"][0]
+        assert client.get(f"/sessions/{session_id}/evaluation").status_code == 200
         assert client.post(
             f"/sessions/{session_id}/advance-time", json={"minutes": 5}
         ).status_code == 409
-        final_events = client.get(f"/sessions/{session_id}/events").json()
-        assert final_events[-1]["event_type"] == "SESSION_COMPLETED"
+
 
 class FailingLLMProvider:
     async def generate_role_response(self, request):
@@ -88,12 +157,7 @@ class FailingLLMProvider:
 
 
 def test_llm_failure_returns_cors_enabled_bad_gateway(tmp_path: Path):
-    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'cors.sqlite3'}")
-    Base.metadata.create_all(engine)
-    database = Session(engine)
-    registry = ScenarioRegistry(SCENARIOS)
-    registry.load()
-    app = FastAPI()
+    app = make_app(tmp_path, FailingLLMProvider())
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000"],
@@ -101,14 +165,6 @@ def test_llm_failure_returns_cors_enabled_bad_gateway(tmp_path: Path):
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.scenarios = registry
-    app.state.llm_provider = FailingLLMProvider()
-    app.include_router(router)
-
-    def database_override():
-        yield database
-
-    app.dependency_overrides[get_db] = database_override
 
     with TestClient(app) as client:
         created = client.post(

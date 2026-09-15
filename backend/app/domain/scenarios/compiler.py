@@ -7,7 +7,11 @@ from pydantic import ValidationError
 
 from .models import (
     CompiledScenario,
-    FactDefinition,
+    ExternalEntityDefinition,
+    FindingDefinition,
+    HypothesisDefinition,
+    InvestigationDefinition,
+    ObservationDefinition,
     RoleDefinition,
     RuntimeScenario,
     ScenarioMetadata,
@@ -25,7 +29,10 @@ class ScenarioCompiler:
     REQUIRED_FILES = (
         "scenario.yaml",
         "roles.yaml",
-        "facts.yaml",
+        "external_entities.yaml",
+        "evidence.yaml",
+        "hypotheses.yaml",
+        "investigations.yaml",
         "timeline.yaml",
         "variants.yaml",
         "scoring.yaml",
@@ -42,19 +49,52 @@ class ScenarioCompiler:
                 self._load(path / "scenario.yaml")["scenario"]
             )
             raw_roles = self._list(self._load(path / "roles.yaml"), "roles")
-            raw_facts = self._list(self._load(path / "facts.yaml"), "facts")
+            raw_external_entities = self._list(
+                self._load(path / "external_entities.yaml"), "external_entities"
+            )
+            evidence = self._load(path / "evidence.yaml")
+            raw_observations = self._list(evidence, "observations")
+            raw_findings = self._list(evidence, "findings")
+            raw_hypotheses = self._list(
+                self._load(path / "hypotheses.yaml"), "hypotheses"
+            )
+            raw_investigations = self._list(
+                self._load(path / "investigations.yaml"), "investigations"
+            )
             raw_timeline = self._list(self._load(path / "timeline.yaml"), "events")
             raw_variants = self._list(self._load(path / "variants.yaml"), "variants")
             raw_rules = self._list(self._load(path / "scoring.yaml"), "rules")
             self._ensure_unique("role", raw_roles)
-            self._ensure_unique("fact", raw_facts)
+            self._ensure_unique("external entity", raw_external_entities)
+            self._ensure_unique("observation", raw_observations)
+            self._ensure_unique("finding", raw_findings)
+            self._ensure_unique("hypothesis", raw_hypotheses)
+            self._ensure_unique("investigation", raw_investigations)
             self._ensure_unique("timeline event", raw_timeline)
             self._ensure_unique("variant", raw_variants)
             self._ensure_unique("scoring rule", raw_rules)
             compiled = CompiledScenario(
                 scenario=metadata,
                 roles=[RoleDefinition.model_validate(item) for item in raw_roles],
-                facts=[FactDefinition.model_validate(item) for item in raw_facts],
+                external_entities=[
+                    ExternalEntityDefinition.model_validate(item)
+                    for item in raw_external_entities
+                ],
+                observations=[
+                    ObservationDefinition.model_validate(item)
+                    for item in raw_observations
+                ],
+                findings=[
+                    FindingDefinition.model_validate(item) for item in raw_findings
+                ],
+                hypotheses=[
+                    HypothesisDefinition.model_validate(item)
+                    for item in raw_hypotheses
+                ],
+                investigations=[
+                    InvestigationDefinition.model_validate(item)
+                    for item in raw_investigations
+                ],
                 timeline=[TimelineEvent.model_validate(item) for item in raw_timeline],
                 variants=[VariantDefinition.model_validate(item) for item in raw_variants],
                 scoring_rules=[ScoringRule.model_validate(item) for item in raw_rules],
@@ -73,14 +113,20 @@ class ScenarioCompiler:
         except StopIteration as exc:
             raise ScenarioValidationError(f"unknown variant: {variant_id}") from exc
 
-        facts = {item.id: item.model_copy(deep=True) for item in compiled.facts}
+        observations = {
+            item.id: item.model_copy(deep=True) for item in compiled.observations
+        }
         timeline = {item.id: item.model_copy(deep=True) for item in compiled.timeline}
         try:
-            for override in variant.fact_overrides:
-                update = override.model_dump(exclude={"fact_id"}, exclude_none=True)
-                merged = facts[override.fact_id].model_dump()
+            for override in variant.observation_overrides:
+                update = override.model_dump(
+                    exclude={"observation_id"}, exclude_none=True
+                )
+                merged = observations[override.observation_id].model_dump()
                 merged.update(update)
-                facts[override.fact_id] = FactDefinition.model_validate(merged)
+                observations[override.observation_id] = (
+                    ObservationDefinition.model_validate(merged)
+                )
             for override in variant.timeline_overrides:
                 if not override.enabled:
                     timeline.pop(override.event_id, None)
@@ -99,18 +145,23 @@ class ScenarioCompiler:
         runtime = RuntimeScenario(
             scenario=compiled.scenario,
             roles=deepcopy(compiled.roles),
-            facts=list(facts.values()),
+            external_entities=deepcopy(compiled.external_entities),
+            observations=list(observations.values()),
+            findings=deepcopy(compiled.findings),
+            hypotheses=deepcopy(compiled.hypotheses),
+            investigations=deepcopy(compiled.investigations),
             timeline=sorted(
                 timeline.values(), key=lambda event: (event.at_minute, event.id)
             ),
             scoring_rules=deepcopy(compiled.scoring_rules),
             variant_id=variant.id,
             ground_truth=deepcopy(variant.ground_truth),
+            investigation_outcomes=deepcopy(variant.investigation_outcomes),
         )
         self._validate_timeline(
             runtime.timeline,
             {role.id for role in runtime.roles},
-            {fact.id for fact in runtime.facts},
+            {item.id for item in runtime.observations},
             runtime.scenario.duration_minutes,
             context=f"variant {variant.id}",
         )
@@ -143,62 +194,150 @@ class ScenarioCompiler:
 
     def _cross_validate(self, compiled: CompiledScenario) -> None:
         role_ids = {role.id for role in compiled.roles}
-        fact_ids = {fact.id for fact in compiled.facts}
+        observation_ids = {item.id for item in compiled.observations}
+        finding_ids = {item.id for item in compiled.findings}
+        evidence_ids = observation_ids | finding_ids
         event_ids = {event.id for event in compiled.timeline}
+        investigation_ids = {item.id for item in compiled.investigations}
+        hypothesis_ids = {item.id for item in compiled.hypotheses}
         category_ids = [item.id for item in compiled.scenario.decision_categories]
         self._ensure_no_duplicate_values("decision category IDs", category_ids)
+        self._ensure_no_duplicate_values(
+            "hypothesis keys", [item.key for item in compiled.hypotheses]
+        )
         decision_categories = set(category_ids)
+
+        collisions = observation_ids & finding_ids
+        if collisions:
+            raise ScenarioValidationError(
+                f"evidence IDs collide across observations and findings: {sorted(collisions)}"
+            )
+
+        for entity in compiled.external_entities:
+            self._ensure_no_duplicate_values(
+                f"external entity {entity.id} accepted communication types",
+                entity.accepts,
+            )
+
+        for investigation in compiled.investigations:
+            self._ensure_no_duplicate_values(
+                f"investigation {investigation.id} performer roles",
+                investigation.performer_roles,
+            )
+            self._ensure_no_duplicate_values(
+                f"investigation {investigation.id} all-evidence prerequisites",
+                investigation.prerequisites.all_evidence,
+            )
+            self._ensure_no_duplicate_values(
+                f"investigation {investigation.id} any-evidence prerequisites",
+                investigation.prerequisites.any_evidence,
+            )
+            unknown_roles = set(investigation.performer_roles) - role_ids
+            if unknown_roles:
+                raise ScenarioValidationError(
+                    f"investigation {investigation.id} references unknown performer roles "
+                    f"{sorted(unknown_roles)}"
+                )
+            prerequisites = {
+                *investigation.prerequisites.all_evidence,
+                *investigation.prerequisites.any_evidence,
+            }
+            unknown_evidence = prerequisites - evidence_ids
+            if unknown_evidence:
+                raise ScenarioValidationError(
+                    f"investigation {investigation.id} prerequisites reference unknown "
+                    f"evidence {sorted(unknown_evidence)}"
+                )
 
         self._validate_timeline(
             compiled.timeline,
             role_ids,
-            fact_ids,
+            observation_ids,
             compiled.scenario.duration_minutes,
             context="base scenario",
         )
 
         for variant in compiled.variants:
-            fact_override_ids = [item.fact_id for item in variant.fact_overrides]
+            observation_override_ids = [
+                item.observation_id for item in variant.observation_overrides
+            ]
             event_override_ids = [item.event_id for item in variant.timeline_overrides]
+            outcome_ids = [
+                item.investigation_id for item in variant.investigation_outcomes
+            ]
             self._ensure_no_duplicate_values(
-                f"variant {variant.id} fact overrides", fact_override_ids
+                f"variant {variant.id} observation overrides",
+                observation_override_ids,
             )
             self._ensure_no_duplicate_values(
                 f"variant {variant.id} timeline overrides", event_override_ids
             )
-            overridden_facts = set(fact_override_ids)
-            overridden_events = set(event_override_ids)
-            if overridden_facts - fact_ids:
+            self._ensure_no_duplicate_values(
+                f"variant {variant.id} investigation outcomes", outcome_ids
+            )
+            unknown_observations = set(observation_override_ids) - observation_ids
+            if unknown_observations:
                 raise ScenarioValidationError(
-                    f"variant {variant.id} overrides unknown facts "
-                    f"{sorted(overridden_facts - fact_ids)}"
+                    f"variant {variant.id} overrides unknown observations "
+                    f"{sorted(unknown_observations)}"
                 )
-            if overridden_events - event_ids:
+            unknown_events = set(event_override_ids) - event_ids
+            if unknown_events:
                 raise ScenarioValidationError(
                     f"variant {variant.id} overrides unknown events "
-                    f"{sorted(overridden_events - event_ids)}"
+                    f"{sorted(unknown_events)}"
+                )
+            unknown_investigations = set(outcome_ids) - investigation_ids
+            if unknown_investigations:
+                raise ScenarioValidationError(
+                    f"variant {variant.id} has outcomes for unknown investigations "
+                    f"{sorted(unknown_investigations)}"
+                )
+            missing_outcomes = investigation_ids - set(outcome_ids)
+            if missing_outcomes:
+                raise ScenarioValidationError(
+                    f"variant {variant.id} is missing investigation outcomes "
+                    f"{sorted(missing_outcomes)}"
                 )
             for override in variant.timeline_overrides:
                 if override.role and override.role not in role_ids:
                     raise ScenarioValidationError(
                         f"variant {variant.id} references unknown role {override.role}"
                     )
-                if override.fact_ids and set(override.fact_ids) - fact_ids:
+                if override.observation_ids:
+                    unknown = set(override.observation_ids) - observation_ids
+                    if unknown:
+                        raise ScenarioValidationError(
+                            f"variant {variant.id} references unknown observations "
+                            f"{sorted(unknown)}"
+                        )
+            for outcome in variant.investigation_outcomes:
+                self._ensure_no_duplicate_values(
+                    f"variant {variant.id} outcome {outcome.investigation_id} findings",
+                    outcome.reveal_findings,
+                )
+                unknown_findings = set(outcome.reveal_findings) - finding_ids
+                if unknown_findings:
                     raise ScenarioValidationError(
-                        f"variant {variant.id} references unknown facts "
-                        f"{sorted(set(override.fact_ids) - fact_ids)}"
+                        f"variant {variant.id} investigation {outcome.investigation_id} "
+                        f"reveals unknown findings {sorted(unknown_findings)}"
                     )
 
         for rule in compiled.scoring_rules:
-            referenced_facts = {
+            referenced_evidence = {
                 item
-                for item in (rule.trigger_fact, rule.fact_id, rule.confirmation_fact)
+                for item in (
+                    rule.trigger_evidence,
+                    rule.evidence_id,
+                    rule.confirmation_evidence,
+                )
                 if item
             }
-            if referenced_facts - fact_ids:
+            unknown_evidence = referenced_evidence - evidence_ids
+            if unknown_evidence:
                 raise ScenarioValidationError(
-                    f"scoring rule {rule.id} references unknown facts "
-                    f"{sorted(referenced_facts - fact_ids)}"
+                    f"scoring rule {rule.id} references unknown evidence "
+                    f"{sorted(unknown_evidence)}"
                 )
             if rule.target_role and rule.target_role not in role_ids:
                 raise ScenarioValidationError(
@@ -212,15 +351,11 @@ class ScenarioCompiler:
                     f"scoring rule {rule.id} references unknown decision category "
                     f"{rule.decision_category}"
                 )
-            if rule.type == "avoid_premature_conclusion":
-                category = compiled.scenario.decision_category(
-                    rule.decision_category or ""
+            if rule.hypothesis_id and rule.hypothesis_id not in hypothesis_ids:
+                raise ScenarioValidationError(
+                    f"scoring rule {rule.id} references unknown hypothesis "
+                    f"{rule.hypothesis_id}"
                 )
-                if not category.captures_confidence:
-                    raise ScenarioValidationError(
-                        f"scoring rule {rule.id} requires confidence, but decision "
-                        f"category {category.id} does not capture it"
-                    )
 
         for variant in compiled.variants:
             self.materialize(compiled, variant.id)
@@ -229,7 +364,7 @@ class ScenarioCompiler:
     def _validate_timeline(
         timeline: list[TimelineEvent],
         role_ids: set[str],
-        fact_ids: set[str],
+        observation_ids: set[str],
         duration: int,
         *,
         context: str,
@@ -243,14 +378,14 @@ class ScenarioCompiler:
                 raise ScenarioValidationError(
                     f"event {event.id} references unknown role {event.role}"
                 )
-            unknown = set(event.fact_ids) - fact_ids
+            unknown = set(event.observation_ids) - observation_ids
             if unknown:
                 raise ScenarioValidationError(
-                    f"event {event.id} references unknown facts {sorted(unknown)}"
+                    f"event {event.id} references unknown observations {sorted(unknown)}"
                 )
-            if len(event.fact_ids) != len(set(event.fact_ids)):
+            if len(event.observation_ids) != len(set(event.observation_ids)):
                 raise ScenarioValidationError(
-                    f"event {event.id} contains duplicate fact references"
+                    f"event {event.id} contains duplicate observation references"
                 )
 
     @staticmethod

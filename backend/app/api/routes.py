@@ -4,18 +4,26 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.domain.evaluation.engine import EvaluationResult
 from app.domain.scenarios.compiler import ScenarioValidationError
+from app.domain.simulation.models import AssessmentProjection, InvestigationRun
 from app.llm.errors import LLMProviderError
 from app.schemas.api import (
     ActionAcceptedResponse,
     AdvanceTimeRequest,
     AskRoleRequest,
     AskRoleResponse,
+    AssessmentRequest,
+    AssessmentSubmissionResponse,
     CreateSessionRequest,
     DecisionCategoryResponse,
     DecisionRequest,
     EventResponse,
-    FactResponse,
+    ExternalEntityResponse,
+    FindingResponse,
+    HypothesisResponse,
+    InvestigationRequest,
+    InvestigationRequestResponse,
     KnowledgeResponse,
+    ObservationResponse,
     RoleResponse,
     ScenarioAuthoringResponse,
     ScenarioAuthoringUpdateRequest,
@@ -24,6 +32,7 @@ from app.schemas.api import (
     ScenarioSourcesUpdateRequest,
     ScenarioSummaryResponse,
     SessionResponse,
+    ShareEvidenceRequest,
     ShareFactRequest,
     VariantResponse,
 )
@@ -105,6 +114,14 @@ def get_scenario(scenario_id: str, request: Request):
                 communication_style=role.communication_style,
             )
             for role in compiled.roles
+        ],
+        external_entities=[
+            ExternalEntityResponse.model_validate(entity.model_dump())
+            for entity in compiled.external_entities
+        ],
+        hypotheses=[
+            HypothesisResponse.model_validate(item.model_dump())
+            for item in compiled.hypotheses
         ],
     )
 
@@ -232,18 +249,38 @@ def list_roles(session_id: str, service: SimulationService = Depends(get_service
 
 
 @router.get(
+    "/sessions/{session_id}/external-entities",
+    response_model=list[ExternalEntityResponse],
+)
+def list_external_entities(
+    session_id: str, service: SimulationService = Depends(get_service)
+):
+    entities = call(lambda: service.external_entities(session_id))
+    return [
+        ExternalEntityResponse.model_validate(entity.model_dump())
+        for entity in entities
+    ]
+
+
+@router.get(
     "/sessions/{session_id}/roles/{role_id}/knowledge",
     response_model=KnowledgeResponse,
 )
 def get_knowledge(
     session_id: str, role_id: str, service: SimulationService = Depends(get_service)
 ):
-    session = call(lambda: service.get_session(session_id))
-    facts = call(lambda: service.role_knowledge(session_id, role_id))
+    knowledge = call(lambda: service.role_knowledge(session_id, role_id))
     return KnowledgeResponse(
-        role_id=role_id,
-        simulation_time=session.simulation_time,
-        facts=[FactResponse.model_validate(fact.model_dump()) for fact in facts],
+        role_id=knowledge.role_id,
+        simulation_time=knowledge.simulation_time,
+        observations=[
+            ObservationResponse.model_validate(item.model_dump())
+            for item in knowledge.observations
+        ],
+        findings=[
+            FindingResponse.model_validate(item.model_dump())
+            for item in knowledge.findings
+        ],
     )
 
 
@@ -253,12 +290,38 @@ async def ask_role(
     body: AskRoleRequest,
     service: SimulationService = Depends(get_service),
 ):
-    return await call_async(lambda: service.ask_role(session_id, body.target_role, body.message))
+    return await call_async(
+        lambda: service.ask_role(session_id, body.target_role, body.message)
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/actions/share-evidence",
+    response_model=ActionAcceptedResponse,
+)
+def share_evidence(
+    session_id: str,
+    body: ShareEvidenceRequest,
+    service: SimulationService = Depends(get_service),
+):
+    event = call(
+        lambda: service.share_evidence(
+            session_id,
+            body.from_role,
+            body.to_role,
+            body.evidence_id,
+        )
+    )
+    return ActionAcceptedResponse(
+        event_id=event.id,
+        simulation_time=event.simulation_time,
+    )
 
 
 @router.post(
     "/sessions/{session_id}/actions/share-fact",
     response_model=ActionAcceptedResponse,
+    deprecated=True,
 )
 def share_fact(
     session_id: str,
@@ -266,9 +329,84 @@ def share_fact(
     service: SimulationService = Depends(get_service),
 ):
     event = call(
-        lambda: service.share_fact(session_id, body.from_role, body.to_role, body.fact_id)
+        lambda: service.share_fact(
+            session_id,
+            body.from_role,
+            body.to_role,
+            body.fact_id,
+        )
     )
-    return ActionAcceptedResponse(event_id=event.id, simulation_time=event.simulation_time)
+    return ActionAcceptedResponse(
+        event_id=event.id,
+        simulation_time=event.simulation_time,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/investigations",
+    response_model=InvestigationRequestResponse,
+)
+async def request_investigation(
+    session_id: str,
+    body: InvestigationRequest,
+    service: SimulationService = Depends(get_service),
+):
+    return await call_async(
+        lambda: service.request_investigation(
+            session_id,
+            body.requester_role,
+            body.performer_role,
+            body.request,
+        )
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/investigations",
+    response_model=list[InvestigationRun],
+)
+def list_investigations(
+    session_id: str,
+    service: SimulationService = Depends(get_service),
+):
+    return call(lambda: service.investigations(session_id))
+
+
+@router.post(
+    "/sessions/{session_id}/assessments",
+    response_model=AssessmentSubmissionResponse,
+)
+async def record_assessment(
+    session_id: str,
+    body: AssessmentRequest,
+    service: SimulationService = Depends(get_service),
+):
+    recorded = await call_async(
+        lambda: service.record_assessment(
+            session_id,
+            body.actor_role,
+            body.statement,
+        )
+    )
+    return AssessmentSubmissionResponse(
+        recorded=recorded,
+        message=(
+            "Assessment recorded."
+            if recorded
+            else "No scenario hypothesis could be identified; the assessment was not recorded."
+        ),
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/assessments",
+    response_model=AssessmentProjection,
+)
+def list_assessments(
+    session_id: str,
+    service: SimulationService = Depends(get_service),
+):
+    return call(lambda: service.assessments(session_id))
 
 
 @router.post(
@@ -290,7 +428,10 @@ def make_decision(
             body.rationale,
         )
     )
-    return ActionAcceptedResponse(event_id=event.id, simulation_time=event.simulation_time)
+    return ActionAcceptedResponse(
+        event_id=event.id,
+        simulation_time=event.simulation_time,
+    )
 
 
 @router.get("/sessions/{session_id}/events", response_model=list[EventResponse])

@@ -72,11 +72,39 @@ class ScenarioRegistry:
                     ]
                 }
             ),
-            "facts.yaml": self._dump_yaml(
+            "external_entities.yaml": self._dump_yaml(
                 {
-                    "facts": [
+                    "external_entities": [
                         item.model_dump(mode="json", exclude_none=True)
-                        for item in document.facts
+                        for item in document.external_entities
+                    ]
+                }
+            ),
+            "evidence.yaml": self._dump_yaml(
+                {
+                    "observations": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in document.observations
+                    ],
+                    "findings": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in document.findings
+                    ],
+                }
+            ),
+            "hypotheses.yaml": self._dump_yaml(
+                {
+                    "hypotheses": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in document.hypotheses
+                    ]
+                }
+            ),
+            "investigations.yaml": self._dump_yaml(
+                {
+                    "investigations": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in document.investigations
                     ]
                 }
             ),

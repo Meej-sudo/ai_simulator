@@ -37,10 +37,10 @@ class EvaluationEngine:
     def _evaluate_rule(
         self, rule: ScoringRule, events: list[EventSnapshot]
     ) -> RuleResult:
-        if rule.type == "avoid_premature_conclusion":
-            return self._avoid_premature(rule, events)
+        if rule.type == "avoid_premature_assessment":
+            return self._avoid_premature_assessment(rule, events)
 
-        trigger = self._first_fact_learned(events, rule.trigger_fact)
+        trigger = self._first_evidence_event(events, rule.trigger_evidence)
         expected_by = (
             trigger.simulation_time + rule.within_minutes
             if trigger and rule.within_minutes is not None
@@ -55,16 +55,18 @@ class EvaluationEngine:
                 events,
                 lambda event: event.target_role == rule.target_role
                 and event.event_type
-                in {EventType.QUESTION_ASKED, EventType.FACT_SHARED}
+                in {EventType.QUESTION_ASKED, EventType.EVIDENCE_SHARED}
                 and (trigger is None or event.sequence > trigger.sequence),
             )
-        elif rule.type == "fact_shared_within":
-            expected_action = f"share fact {rule.fact_id} with role {rule.target_role}"
+        elif rule.type == "evidence_shared_within":
+            expected_action = (
+                f"share evidence {rule.evidence_id} with role {rule.target_role}"
+            )
             actual = self._first(
                 events,
-                lambda event: event.event_type == EventType.FACT_SHARED
+                lambda event: event.event_type == EventType.EVIDENCE_SHARED
                 and event.target_role == rule.target_role
-                and event.payload.get("fact_id") == rule.fact_id
+                and event.payload.get("evidence_id") == rule.evidence_id
                 and (trigger is None or event.sequence > trigger.sequence),
             )
         elif rule.type == "decision_within":
@@ -92,54 +94,69 @@ class EvaluationEngine:
             expected_action=expected_action,
             expected_by_minute=expected_by,
             actual_action=(
-                actual.payload.get("decision")
+                str(actual.payload.get("decision"))
                 if actual and actual.event_type == EventType.DECISION_MADE
-                else actual.event_type if actual else None
+                else actual.event_type.value if actual else None
             ),
             actual_minute=actual.simulation_time if actual else None,
             relevant_event_ids=[event.id for event in relevant],
             relevant_events=relevant,
         )
 
-    def _avoid_premature(
+    def _avoid_premature_assessment(
         self, rule: ScoringRule, events: list[EventSnapshot]
     ) -> RuleResult:
-        confirmation = self._first_fact_learned(events, rule.confirmation_fact)
-        decision = self._first(
+        confirmation = self._first_evidence_event(
+            events, rule.confirmation_evidence
+        )
+        assessment = self._first(
             events,
-            lambda event: event.event_type == EventType.DECISION_MADE
-            and event.payload.get("decision_category") == rule.decision_category
+            lambda event: event.event_type == EventType.ASSESSMENT_RECORDED
+            and event.payload.get("hypothesis_id") == rule.hypothesis_id
             and event.payload.get("confidence") == rule.conclusion_confidence,
         )
         premature = bool(
-            decision
-            and (confirmation is None or decision.sequence < confirmation.sequence)
+            assessment
+            and (
+                confirmation is None
+                or assessment.sequence < confirmation.sequence
+            )
         )
-        relevant = [event for event in (confirmation, decision) if event]
+        relevant = [event for event in (confirmation, assessment) if event]
         return RuleResult(
             rule_id=rule.id,
             description=rule.description,
             possible_points=rule.points,
             awarded_points=0 if premature else rule.points,
             expected_action=(
-                f"avoid a {rule.conclusion_confidence} {rule.decision_category} "
-                f"conclusion before {rule.confirmation_fact}"
+                f"avoid a {rule.conclusion_confidence} assessment of "
+                f"{rule.hypothesis_id} before {rule.confirmation_evidence}"
             ),
             expected_by_minute=None,
-            actual_action=decision.payload.get("decision") if decision else None,
-            actual_minute=decision.simulation_time if decision else None,
+            actual_action=assessment.payload.get("statement") if assessment else None,
+            actual_minute=assessment.simulation_time if assessment else None,
             relevant_event_ids=[event.id for event in relevant],
             relevant_events=relevant,
         )
 
     @staticmethod
-    def _first_fact_learned(
-        events: list[EventSnapshot], fact_id: str | None
+    def _first_evidence_event(
+        events: list[EventSnapshot], evidence_id: str | None
     ) -> EventSnapshot | None:
         return EvaluationEngine._first(
             events,
-            lambda event: event.event_type == EventType.FACT_LEARNED
-            and event.payload.get("fact_id") == fact_id,
+            lambda event: (
+                event.event_type == EventType.OBSERVATION_REVEALED
+                and event.payload.get("observation_id") == evidence_id
+            )
+            or (
+                event.event_type == EventType.FINDING_REVEALED
+                and event.payload.get("finding_id") == evidence_id
+            )
+            or (
+                event.event_type == EventType.EVIDENCE_SHARED
+                and event.payload.get("evidence_id") == evidence_id
+            ),
         )
 
     @staticmethod

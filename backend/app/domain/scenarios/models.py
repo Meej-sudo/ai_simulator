@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,16 +11,33 @@ class Confidence(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class Reliability(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CONFIRMED = "confirmed"
+
+
 CONFIDENCE_SEMANTICS: dict[Confidence, str] = {
-    Confidence.LOW: "weak indication or preliminary signal",
+    Confidence.LOW: "weak indication or preliminary belief",
     Confidence.MEDIUM: "suspected or plausible, but unconfirmed",
     Confidence.HIGH: "supported by strong evidence and highly likely",
-    Confidence.CONFIRMED: "established as a confirmed fact",
+    Confidence.CONFIRMED: "stated as established or certain",
 }
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+ScenarioIdentifier = Annotated[
+    str,
+    Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$"),
+]
+EvidenceIdentifier = Annotated[
+    str,
+    Field(min_length=1, pattern=r"^(?:O|FD)[0-9]+$"),
+]
 
 
 class DecisionCategoryDefinition(StrictModel):
@@ -54,41 +71,87 @@ class RoleDefinition(StrictModel):
     response_guidance: str | None = None
 
 
-class FactDefinition(StrictModel):
-    id: str
-    type: Literal["observation", "assessment"]
-    statement: str
-    confidence: Confidence = Confidence.CONFIRMED
+class ExternalEntityDefinition(StrictModel):
+    id: ScenarioIdentifier
+    display_name: str = Field(min_length=1)
+    type: ScenarioIdentifier
+    accepts: list[ScenarioIdentifier] = Field(min_length=1)
+
+
+class ObservationDefinition(StrictModel):
+    id: EvidenceIdentifier
+    source: ScenarioIdentifier
+    statement: str = Field(min_length=1)
+    reliability: Reliability
+
+
+class FindingDefinition(StrictModel):
+    id: EvidenceIdentifier
+    statement: str = Field(min_length=1)
+    reliability: Reliability
+
+
+EvidenceDefinition = ObservationDefinition | FindingDefinition
+
+
+class HypothesisDefinition(StrictModel):
+    id: str = Field(min_length=1, pattern=r"^H[0-9]+$")
+    key: ScenarioIdentifier
+    label: str = Field(min_length=1)
+
+
+class InvestigationPrerequisites(StrictModel):
+    all_evidence: list[EvidenceIdentifier] = Field(default_factory=list)
+    any_evidence: list[EvidenceIdentifier] = Field(default_factory=list)
+
+
+class InvestigationDefinition(StrictModel):
+    id: str = Field(min_length=1, pattern=r"^I[0-9]+$")
+    label: str = Field(min_length=1)
+    performer_roles: list[str] = Field(min_length=1)
+    request_description: str = Field(min_length=1)
+    match_hints: list[str] = Field(min_length=1)
+    prerequisites: InvestigationPrerequisites = Field(
+        default_factory=InvestigationPrerequisites
+    )
+    duration_minutes: int = Field(ge=0)
+    repeatable: bool = False
 
 
 class TimelineEvent(StrictModel):
     id: str
     at_minute: int = Field(ge=0)
-    type: Literal["knowledge_grant"]
+    type: Literal["observation_grant"]
     role: str
-    fact_ids: list[str] = Field(min_length=1)
+    observation_ids: list[EvidenceIdentifier] = Field(min_length=1)
 
 
-class FactOverride(StrictModel):
-    fact_id: str
+class ObservationOverride(StrictModel):
+    observation_id: EvidenceIdentifier
     statement: str | None = None
-    confidence: Confidence | None = None
+    reliability: Reliability | None = None
 
 
 class TimelineOverride(StrictModel):
     event_id: str
     at_minute: int | None = Field(default=None, ge=0)
     role: str | None = None
-    fact_ids: list[str] | None = None
+    observation_ids: list[EvidenceIdentifier] | None = None
     enabled: bool = True
+
+
+class InvestigationOutcome(StrictModel):
+    investigation_id: str
+    reveal_findings: list[EvidenceIdentifier] = Field(min_length=1)
 
 
 class VariantDefinition(StrictModel):
     id: str
     name: str
     ground_truth: dict[str, Any]
-    fact_overrides: list[FactOverride] = Field(default_factory=list)
+    observation_overrides: list[ObservationOverride] = Field(default_factory=list)
     timeline_overrides: list[TimelineOverride] = Field(default_factory=list)
+    investigation_outcomes: list[InvestigationOutcome] = Field(min_length=1)
 
 
 class ScoringRule(StrictModel):
@@ -96,33 +159,43 @@ class ScoringRule(StrictModel):
     description: str
     type: Literal[
         "role_contacted_within",
-        "fact_shared_within",
+        "evidence_shared_within",
         "decision_within",
-        "avoid_premature_conclusion",
+        "avoid_premature_assessment",
     ]
     points: int = Field(gt=0)
     within_minutes: int | None = Field(default=None, gt=0)
-    trigger_fact: str | None = None
+    trigger_evidence: EvidenceIdentifier | None = None
     target_role: str | None = None
-    fact_id: str | None = None
+    evidence_id: EvidenceIdentifier | None = None
     decision_category: str | None = None
+    hypothesis_id: str | None = None
     conclusion_confidence: Confidence | None = None
-    confirmation_fact: str | None = None
+    confirmation_evidence: EvidenceIdentifier | None = None
 
     @model_validator(mode="after")
     def validate_fields_for_type(self) -> "ScoringRule":
         required: dict[str, tuple[str, ...]] = {
-            "role_contacted_within": ("trigger_fact", "target_role", "within_minutes"),
-            "fact_shared_within": ("trigger_fact", "target_role", "fact_id", "within_minutes"),
+            "role_contacted_within": (
+                "trigger_evidence",
+                "target_role",
+                "within_minutes",
+            ),
+            "evidence_shared_within": (
+                "trigger_evidence",
+                "target_role",
+                "evidence_id",
+                "within_minutes",
+            ),
             "decision_within": (
-                "trigger_fact",
+                "trigger_evidence",
                 "decision_category",
                 "within_minutes",
             ),
-            "avoid_premature_conclusion": (
-                "decision_category",
+            "avoid_premature_assessment": (
+                "hypothesis_id",
                 "conclusion_confidence",
-                "confirmation_fact",
+                "confirmation_evidence",
             ),
         }
         missing = [name for name in required[self.type] if getattr(self, name) is None]
@@ -134,7 +207,11 @@ class ScoringRule(StrictModel):
 class CompiledScenario(StrictModel):
     scenario: ScenarioMetadata
     roles: list[RoleDefinition]
-    facts: list[FactDefinition]
+    external_entities: list[ExternalEntityDefinition]
+    observations: list[ObservationDefinition]
+    findings: list[FindingDefinition]
+    hypotheses: list[HypothesisDefinition]
+    investigations: list[InvestigationDefinition]
     timeline: list[TimelineEvent]
     variants: list[VariantDefinition]
     scoring_rules: list[ScoringRule]
@@ -142,26 +219,78 @@ class CompiledScenario(StrictModel):
     def role(self, role_id: str) -> RoleDefinition:
         return next(role for role in self.roles if role.id == role_id)
 
-    def fact(self, fact_id: str) -> FactDefinition:
-        return next(fact for fact in self.facts if fact.id == fact_id)
+    def observation(self, observation_id: str) -> ObservationDefinition:
+        return next(item for item in self.observations if item.id == observation_id)
+
+    def finding(self, finding_id: str) -> FindingDefinition:
+        return next(item for item in self.findings if item.id == finding_id)
+
+    def evidence(self, evidence_id: str) -> EvidenceDefinition:
+        for item in [*self.observations, *self.findings]:
+            if item.id == evidence_id:
+                return item
+        raise StopIteration
+
+    def hypothesis(self, hypothesis_id: str) -> HypothesisDefinition:
+        return next(item for item in self.hypotheses if item.id == hypothesis_id)
+
+    def investigation(self, investigation_id: str) -> InvestigationDefinition:
+        return next(item for item in self.investigations if item.id == investigation_id)
+
+    def external_entity(self, entity_id: str) -> ExternalEntityDefinition:
+        return next(
+            entity for entity in self.external_entities if entity.id == entity_id
+        )
 
     def variant(self, variant_id: str) -> VariantDefinition:
         return next(variant for variant in self.variants if variant.id == variant_id)
 
 
 class RuntimeScenario(StrictModel):
-    """Variant-resolved scenario. ground_truth deliberately remains separate."""
+    """Variant-resolved scenario with hidden truth and outcomes excluded from dumps."""
 
     scenario: ScenarioMetadata
     roles: list[RoleDefinition]
-    facts: list[FactDefinition]
+    external_entities: list[ExternalEntityDefinition]
+    observations: list[ObservationDefinition]
+    findings: list[FindingDefinition]
+    hypotheses: list[HypothesisDefinition]
+    investigations: list[InvestigationDefinition]
     timeline: list[TimelineEvent]
     scoring_rules: list[ScoringRule]
     variant_id: str
     ground_truth: dict[str, Any] = Field(exclude=True)
+    investigation_outcomes: list[InvestigationOutcome] = Field(exclude=True)
 
     def role(self, role_id: str) -> RoleDefinition:
         return next(role for role in self.roles if role.id == role_id)
 
-    def fact(self, fact_id: str) -> FactDefinition:
-        return next(fact for fact in self.facts if fact.id == fact_id)
+    def observation(self, observation_id: str) -> ObservationDefinition:
+        return next(item for item in self.observations if item.id == observation_id)
+
+    def finding(self, finding_id: str) -> FindingDefinition:
+        return next(item for item in self.findings if item.id == finding_id)
+
+    def evidence(self, evidence_id: str) -> EvidenceDefinition:
+        for item in [*self.observations, *self.findings]:
+            if item.id == evidence_id:
+                return item
+        raise StopIteration
+
+    def hypothesis(self, hypothesis_id: str) -> HypothesisDefinition:
+        return next(item for item in self.hypotheses if item.id == hypothesis_id)
+
+    def investigation(self, investigation_id: str) -> InvestigationDefinition:
+        return next(item for item in self.investigations if item.id == investigation_id)
+
+    def investigation_outcome(self, investigation_id: str) -> InvestigationOutcome:
+        return next(
+            item
+            for item in self.investigation_outcomes
+            if item.investigation_id == investigation_id
+        )
+
+    def external_entity(self, entity_id: str) -> ExternalEntityDefinition:
+        return next(
+            entity for entity in self.external_entities if entity.id == entity_id
+        )

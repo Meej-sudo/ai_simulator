@@ -28,8 +28,44 @@ type Session = {
   status: "created" | "running" | "completed";
 };
 type Role = { id: string; display_name: string; responsibilities: string[] };
-type Fact = { id: string; statement: string; confidence: string };
-type Knowledge = { role_id: string; simulation_time: number; facts: Fact[] };
+type Observation = {
+  id: string;
+  source: string;
+  statement: string;
+  reliability: string;
+};
+type Finding = { id: string; statement: string; reliability: string };
+type Evidence = (Observation | Finding) & { kind: "observation" | "finding" };
+type Knowledge = {
+  role_id: string;
+  simulation_time: number;
+  observations: Observation[];
+  findings: Finding[];
+};
+type InvestigationRun = {
+  id: string;
+  investigation_id: string;
+  label: string;
+  requester_role: string;
+  performer_role: string;
+  request: string;
+  status: "in_progress" | "completed";
+  started_at: number;
+  due_at: number;
+  completed_at: number | null;
+};
+type Assessment = {
+  event_id: string;
+  hypothesis_id: string;
+  hypothesis_key: string;
+  hypothesis_label: string;
+  actor_role: string;
+  confidence: string;
+  basis_evidence_ids: string[];
+  statement: string;
+  recorded_at: number;
+};
+type AssessmentProjection = { history: Assessment[]; current: Assessment[] };
 type AuditEvent = {
   id: string;
   sequence: number;
@@ -54,7 +90,12 @@ export default function Home() {
   const [variantId, setVariantId] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [knowledge, setKnowledge] = useState<Record<string, Fact[]>>({});
+  const [knowledge, setKnowledge] = useState<Record<string, Evidence[]>>({});
+  const [investigations, setInvestigations] = useState<InvestigationRun[]>([]);
+  const [assessments, setAssessments] = useState<AssessmentProjection>({
+    history: [],
+    current: [],
+  });
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [completedExercise, setCompletedExercise] = useState<CompletedExercise | null>(null);
   const [targetRole, setTargetRole] = useState("soc");
@@ -62,7 +103,14 @@ export default function Home() {
   const [answer, setAnswer] = useState("");
   const [shareFrom, setShareFrom] = useState("soc");
   const [shareTo, setShareTo] = useState("dpo");
-  const [shareFact, setShareFact] = useState("");
+  const [shareEvidence, setShareEvidence] = useState("");
+  const [investigationRequester, setInvestigationRequester] = useState("ciso");
+  const [investigationPerformer, setInvestigationPerformer] = useState("soc");
+  const [investigationText, setInvestigationText] = useState("");
+  const [investigationNotice, setInvestigationNotice] = useState("");
+  const [assessmentActor, setAssessmentActor] = useState("ciso");
+  const [assessmentText, setAssessmentText] = useState("");
+  const [assessmentNotice, setAssessmentNotice] = useState("");
   const [decisionActor, setDecisionActor] = useState("ciso");
   const [decisionCategory, setDecisionCategory] = useState("containment");
   const [decisionText, setDecisionText] = useState("");
@@ -75,10 +123,12 @@ export default function Home() {
     () => scenarios.find((item) => item.id === scenarioId),
     [scenarios, scenarioId],
   );
-  const shareableFacts = knowledge[shareFrom] ?? [];
-  const selectedShareFact = shareableFacts.some((fact) => fact.id === shareFact)
-    ? shareFact
-    : (shareableFacts[0]?.id ?? "");
+  const shareableEvidence = knowledge[shareFrom] ?? [];
+  const selectedShareEvidence = shareableEvidence.some(
+    (item) => item.id === shareEvidence,
+  )
+    ? shareEvidence
+    : (shareableEvidence[0]?.id ?? "");
   const selectedDecisionCategory = selected?.decision_categories.find(
     (category) => category.id === decisionCategory,
   );
@@ -98,20 +148,31 @@ export default function Home() {
 
   async function refresh(id = session?.id) {
     if (!id) return;
-    const [nextSession, nextRoles, nextEvents] = await Promise.all([
-      api<Session>(`/sessions/${id}`),
-      api<Role[]>(`/sessions/${id}/roles`),
-      api<AuditEvent[]>(`/sessions/${id}/events`),
-    ]);
+    const [nextSession, nextRoles, nextEvents, nextInvestigations, nextAssessments] =
+      await Promise.all([
+        api<Session>(`/sessions/${id}`),
+        api<Role[]>(`/sessions/${id}/roles`),
+        api<AuditEvent[]>(`/sessions/${id}/events`),
+        api<InvestigationRun[]>(`/sessions/${id}/investigations`),
+        api<AssessmentProjection>(`/sessions/${id}/assessments`),
+      ]);
     const knowledgePairs = await Promise.all(
       nextRoles.map(async (role) => {
-        const result = await api<Knowledge>(`/sessions/${id}/roles/${role.id}/knowledge`);
-        return [role.id, result.facts] as const;
+        const result = await api<Knowledge>(
+          `/sessions/${id}/roles/${role.id}/knowledge`,
+        );
+        const evidence: Evidence[] = [
+          ...result.observations.map((item) => ({ ...item, kind: "observation" as const })),
+          ...result.findings.map((item) => ({ ...item, kind: "finding" as const })),
+        ];
+        return [role.id, evidence] as const;
       }),
     );
     setSession(nextSession);
     setRoles(nextRoles);
     setEvents(nextEvents);
+    setInvestigations(nextInvestigations);
+    setAssessments(nextAssessments);
     setKnowledge(Object.fromEntries(knowledgePairs));
   }
 
@@ -148,9 +209,7 @@ export default function Home() {
       !window.confirm(
         "End this exercise? The session will be closed and no further actions will be accepted.",
       )
-    ) {
-      return;
-    }
+    ) return;
     return run(async () => {
       const ended = await api<Session>(`/sessions/${session.id}/complete`, {
         method: "POST",
@@ -168,9 +227,13 @@ export default function Home() {
       setSession(null);
       setRoles([]);
       setKnowledge({});
+      setInvestigations([]);
+      setAssessments({ history: [], current: [] });
       setEvents([]);
       setAnswer("");
-      setShareFact("");
+      setShareEvidence("");
+      setInvestigationNotice("");
+      setAssessmentNotice("");
       setDecisionText("");
       setRationale("");
     });
@@ -203,29 +266,58 @@ export default function Home() {
   function share(event: FormEvent) {
     event.preventDefault();
     return run(async () => {
-      if (!session || !selectedShareFact) return;
-      await api(`/sessions/${session.id}/actions/share-fact`, {
+      if (!session || !selectedShareEvidence) return;
+      await api(`/sessions/${session.id}/actions/share-evidence`, {
         method: "POST",
         body: JSON.stringify({
           from_role: shareFrom,
           to_role: shareTo,
-          fact_id: selectedShareFact,
+          evidence_id: selectedShareEvidence,
         }),
       });
       await refresh();
     });
   }
 
-  function handleScenarioSaved(updated: Scenario) {
-    setScenarios((current) => current.map(
-      (item) => item.id === updated.id ? updated : item,
-    ));
-    if (!updated.variants.some((item) => item.id === variantId)) {
-      setVariantId(updated.variants[0]?.id ?? "");
-    }
-    if (!updated.decision_categories.some((item) => item.id === decisionCategory)) {
-      setDecisionCategory(updated.decision_categories[0]?.id ?? "");
-    }
+  function investigate(event: FormEvent) {
+    event.preventDefault();
+    return run(async () => {
+      if (!session) return;
+      const result = await api<{ accepted: boolean; reason: string }>(
+        `/sessions/${session.id}/investigations`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            requester_role: investigationRequester,
+            performer_role: investigationPerformer,
+            request: investigationText,
+          }),
+        },
+      );
+      setInvestigationNotice(result.reason);
+      if (result.accepted) setInvestigationText("");
+      await refresh();
+    });
+  }
+
+  function assess(event: FormEvent) {
+    event.preventDefault();
+    return run(async () => {
+      if (!session) return;
+      const result = await api<{ message: string }>(
+        `/sessions/${session.id}/assessments`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            actor_role: assessmentActor,
+            statement: assessmentText,
+          }),
+        },
+      );
+      setAssessmentNotice(result.message);
+      if (result.message === "Assessment recorded.") setAssessmentText("");
+      await refresh();
+    });
   }
 
   function decide(event: FormEvent) {
@@ -248,6 +340,18 @@ export default function Home() {
       setRationale("");
       await refresh();
     });
+  }
+
+  function handleScenarioSaved(updated: Scenario) {
+    setScenarios((current) => current.map(
+      (item) => item.id === updated.id ? updated : item,
+    ));
+    if (!updated.variants.some((item) => item.id === variantId)) {
+      setVariantId(updated.variants[0]?.id ?? "");
+    }
+    if (!updated.decision_categories.some((item) => item.id === decisionCategory)) {
+      setDecisionCategory(updated.decision_categories[0]?.id ?? "");
+    }
   }
 
   return (
@@ -281,7 +385,7 @@ export default function Home() {
           <div>
             <span className="kicker">NEW EXERCISE</span>
             <h2>Choose a deterministic incident track</h2>
-            <p>{selected?.description ?? "Loading scenario catalog…"}</p>
+            <p>{selected?.description ?? "Loading scenario catalog..."}</p>
           </div>
           <label>
             Scenario
@@ -322,9 +426,9 @@ export default function Home() {
             <h2>{selected?.name}</h2>
             <p className="mono">{session.variant_id} / {session.id.slice(0, 8)}</p>
             <div className="button-row">
-              <button disabled={busy || session.status !== "running"} onClick={() => advance(5)}>+5 min</button>
-              <button disabled={busy || session.status !== "running"} onClick={() => advance(15)}>+15 min</button>
-              <button className="exit-button" disabled={busy || session.status !== "running"} onClick={endSession}>End &amp; exit</button>
+              <button disabled={busy} onClick={() => advance(5)}>+5 min</button>
+              <button disabled={busy} onClick={() => advance(15)}>+15 min</button>
+              <button className="exit-button" disabled={busy} onClick={endSession}>End &amp; exit</button>
             </div>
 
             <form onSubmit={ask}>
@@ -341,10 +445,58 @@ export default function Home() {
             </form>
             {answer && <blockquote>{answer}</blockquote>}
 
-            <div className="action-divider"><span>Structured actions</span></div>
+            <div className="action-divider"><span>Evidence discovery and response</span></div>
             <div className="action-grid">
+              <form className="action-card" onSubmit={investigate}>
+                <span className="kicker">REQUEST INVESTIGATION</span>
+                <label>
+                  Requested by
+                  <select value={investigationRequester} onChange={(event) => setInvestigationRequester(event.target.value)}>
+                    {roles.map((role) => <option key={role.id} value={role.id}>{role.display_name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Performed by
+                  <select value={investigationPerformer} onChange={(event) => setInvestigationPerformer(event.target.value)}>
+                    {roles.map((role) => <option key={role.id} value={role.id}>{role.display_name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  What should be investigated?
+                  <textarea
+                    value={investigationText}
+                    onChange={(event) => setInvestigationText(event.target.value)}
+                    placeholder="Describe the evidence you want the role to obtain."
+                    rows={3}
+                  />
+                </label>
+                <button disabled={busy || !investigationText.trim()}>Submit request</button>
+                {investigationNotice && <small className="action-notice">{investigationNotice}</small>}
+              </form>
+
+              <form className="action-card" onSubmit={assess}>
+                <span className="kicker">RECORD ASSESSMENT</span>
+                <label>
+                  Assessment owner
+                  <select value={assessmentActor} onChange={(event) => setAssessmentActor(event.target.value)}>
+                    {roles.map((role) => <option key={role.id} value={role.id}>{role.display_name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Current assessment
+                  <textarea
+                    value={assessmentText}
+                    onChange={(event) => setAssessmentText(event.target.value)}
+                    placeholder="State your hypothesis, confidence, and evidence basis in your own words."
+                    rows={5}
+                  />
+                </label>
+                <button disabled={busy || !assessmentText.trim()}>Record assessment</button>
+                {assessmentNotice && <small className="action-notice">{assessmentNotice}</small>}
+              </form>
+
               <form className="action-card" onSubmit={share}>
-                <span className="kicker">SHARE KNOWN FACT</span>
+                <span className="kicker">SHARE EVIDENCE</span>
                 <label>
                   From
                   <select value={shareFrom} onChange={(event) => setShareFrom(event.target.value)}>
@@ -358,15 +510,15 @@ export default function Home() {
                   </select>
                 </label>
                 <label>
-                  Permitted fact
-                  <select value={selectedShareFact} onChange={(event) => setShareFact(event.target.value)}>
-                    {shareableFacts.length === 0 && <option value="">No known facts</option>}
-                    {shareableFacts.map((fact) => (
-                      <option key={fact.id} value={fact.id}>{fact.id} · {fact.statement}</option>
+                  Known evidence
+                  <select value={selectedShareEvidence} onChange={(event) => setShareEvidence(event.target.value)}>
+                    {shareableEvidence.length === 0 && <option value="">No known evidence</option>}
+                    {shareableEvidence.map((item) => (
+                      <option key={item.id} value={item.id}>{item.id} - {item.statement}</option>
                     ))}
                   </select>
                 </label>
-                <button disabled={busy || !selectedShareFact || shareFrom === shareTo}>Share fact</button>
+                <button disabled={busy || !selectedShareEvidence || shareFrom === shareTo}>Share evidence</button>
               </form>
 
               <form className="action-card" onSubmit={decide}>
@@ -387,21 +539,13 @@ export default function Home() {
                 </label>
                 <label>
                   What was decided?
-                  <textarea
-                    value={decisionText}
-                    onChange={(event) => setDecisionText(event.target.value)}
-                    placeholder="Describe the decision without choosing from a suggested action."
-                    rows={3}
-                  />
+                  <textarea value={decisionText} onChange={(event) => setDecisionText(event.target.value)} rows={3} />
                 </label>
                 {selectedDecisionCategory?.captures_confidence && (
                   <label>
                     Conclusion confidence
                     <select value={decisionConfidence} onChange={(event) => setDecisionConfidence(event.target.value)}>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="confirmed">Confirmed</option>
+                      {["low", "medium", "high", "confirmed"].map((value) => <option key={value}>{value}</option>)}
                     </select>
                   </label>
                 )}
@@ -412,13 +556,69 @@ export default function Home() {
                 <button disabled={busy || !decisionCategory || !decisionText.trim()}>Record decision</button>
               </form>
             </div>
+
+            <div className="action-divider"><span>Investigation status</span></div>
+            <div className="status-list">
+              {investigations.length === 0 && <p>No investigations have started.</p>}
+              {investigations.map((item) => (
+                <article key={item.id}>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <small>{item.performer_role} / requested T+{item.started_at}</small>
+                  </div>
+                  <span className={item.status}>{item.status.replaceAll("_", " ")}</span>
+                  <time>{item.status === "completed" ? `T+${item.completed_at}` : `Due T+${item.due_at}`}</time>
+                </article>
+              ))}
+            </div>
+
+            <div className="action-divider"><span>Current assessments</span></div>
+            <div className="assessment-list">
+              {assessments.current.length === 0 && <p>No hypothesis assessments recorded.</p>}
+              {assessments.current.map((item) => (
+                <article key={item.hypothesis_id}>
+                  <div>
+                    <strong>{item.hypothesis_label}</strong>
+                    <small>{item.actor_role} / T+{item.recorded_at}</small>
+                  </div>
+                  <span>{item.confidence}</span>
+                  <p>{item.statement}</p>
+                  {item.basis_evidence_ids.length > 0 && (
+                    <small>Basis: {item.basis_evidence_ids.join(", ")}</small>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel evidence-panel">
+            <div className="section-title">
+              <span className="kicker">ROLE KNOWLEDGE</span>
+              <span>OBSERVATIONS + FINDINGS</span>
+            </div>
+            <div className="knowledge-list">
+              {roles.map((role) => (
+                <article key={role.id}>
+                  <strong>{role.display_name}</strong>
+                  {(knowledge[role.id] ?? []).length === 0 ? (
+                    <small>No evidence known</small>
+                  ) : (
+                    (knowledge[role.id] ?? []).map((item) => (
+                      <div key={item.id}>
+                        <span>{item.kind === "finding" ? "Finding" : "Observation"}</span>
+                        <p>{item.statement}</p>
+                        <small>{item.id} / {item.reliability} reliability</small>
+                      </div>
+                    ))
+                  )}
+                </article>
+              ))}
+            </div>
           </section>
 
           <section className="panel score">
             <span className="kicker">EVALUATION</span>
-            <div className="score-number">
-              <strong>—</strong>
-            </div>
+            <div className="score-number"><strong>-</strong></div>
             <div className="debrief-locked">
               Detailed scoring is withheld until the exercise is closed.
             </div>
@@ -435,7 +635,7 @@ export default function Home() {
                   <time>T+{String(item.simulation_time).padStart(3, "0")}</time>
                   <div>
                     <strong>{item.event_type.replaceAll("_", " ")}</strong>
-                    <small>{item.actor_role ?? "system"}{item.target_role ? ` → ${item.target_role}` : ""}</small>
+                    <small>{item.actor_role ?? "system"}{item.target_role ? ` -> ${item.target_role}` : ""}</small>
                   </div>
                 </article>
               ))}

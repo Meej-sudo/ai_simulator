@@ -1,8 +1,25 @@
+from typing import TypeVar
+
 import httpx
+from pydantic import BaseModel
 
 from .errors import LLMProviderError
-from .models import RoleResponse, RoleResponseRequest
-from .prompts import build_system_prompt
+from .models import (
+    AssessmentInterpretation,
+    AssessmentInterpretationRequest,
+    InvestigationInterpretation,
+    InvestigationInterpretationRequest,
+    RoleResponse,
+    RoleResponseRequest,
+)
+from .prompts import (
+    build_assessment_prompt,
+    build_investigation_prompt,
+    build_system_prompt,
+)
+
+
+StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
 
 
 class OllamaLLMProvider:
@@ -18,14 +35,20 @@ class OllamaLLMProvider:
         self.timeout_seconds = timeout_seconds
         self.client = client
 
-    async def generate_role_response(self, request: RoleResponseRequest) -> RoleResponse:
+    async def _chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        response_type: type[StructuredResponse],
+        contract_name: str,
+    ) -> StructuredResponse:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": build_system_prompt(request)},
-                {"role": "user", "content": request.trainee_question},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
             ],
-            "format": RoleResponse.model_json_schema(),
+            "format": response_type.model_json_schema(),
             "stream": False,
             "options": {"temperature": 0.2},
         }
@@ -52,8 +75,36 @@ class OllamaLLMProvider:
 
         try:
             content = response.json()["message"]["content"]
-            return RoleResponse.model_validate_json(content)
+            return response_type.model_validate_json(content)
         except (KeyError, TypeError, ValueError) as exc:
             raise LLMProviderError(
-                "Ollama returned an invalid structured role response"
+                f"Ollama returned an invalid structured {contract_name}"
             ) from exc
+
+    async def generate_role_response(self, request: RoleResponseRequest) -> RoleResponse:
+        return await self._chat(
+            build_system_prompt(request),
+            request.trainee_question,
+            RoleResponse,
+            "role response",
+        )
+
+    async def interpret_investigation(
+        self, request: InvestigationInterpretationRequest
+    ) -> InvestigationInterpretation:
+        return await self._chat(
+            build_investigation_prompt(request),
+            request.trainee_request,
+            InvestigationInterpretation,
+            "investigation interpretation",
+        )
+
+    async def interpret_assessment(
+        self, request: AssessmentInterpretationRequest
+    ) -> AssessmentInterpretation:
+        return await self._chat(
+            build_assessment_prompt(request),
+            request.trainee_statement,
+            AssessmentInterpretation,
+            "assessment interpretation",
+        )

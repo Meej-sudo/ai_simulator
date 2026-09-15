@@ -3,6 +3,7 @@ from shutil import copytree
 from stat import S_IMODE
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,7 +17,10 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2] / "scenarios"
 REQUIRED_FILES = {
     "scenario.yaml",
     "roles.yaml",
-    "facts.yaml",
+    "external_entities.yaml",
+    "evidence.yaml",
+    "hypotheses.yaml",
+    "investigations.yaml",
     "timeline.yaml",
     "variants.yaml",
     "scoring.yaml",
@@ -31,13 +35,20 @@ def registry_copy(tmp_path: Path) -> ScenarioRegistry:
     return registry
 
 
+def app_for(registry: ScenarioRegistry) -> FastAPI:
+    app = FastAPI()
+    app.state.scenarios = registry
+    app.state.llm_provider = FakeLLMProvider()
+    app.include_router(router)
+    return app
+
+
 def test_updates_complete_validated_source_set_and_reloads_registry(tmp_path: Path):
     registry = registry_copy(tmp_path)
     files = registry.source_files("ransomware_001")
-    files["scenario.yaml"] = files["scenario.yaml"].replace(
-        "Coordinate investigation, escalation, privacy response, and executive decisions",
-        "Coordinate a revised response",
-    )
+    metadata = yaml.safe_load(files["scenario.yaml"])
+    metadata["scenario"]["description"] = "Coordinate a revised response"
+    files["scenario.yaml"] = yaml.safe_dump(metadata, sort_keys=False)
 
     updated = registry.update_source_files("ransomware_001", files)
 
@@ -53,9 +64,11 @@ def test_update_preserves_source_file_permissions_and_ownership(tmp_path: Path):
     scenario_file = registry.root / "ransomware_001" / "scenario.yaml"
     scenario_file.chmod(0o640)
     original = scenario_file.stat()
-    files = registry.source_files("ransomware_001")
 
-    registry.update_source_files("ransomware_001", files)
+    registry.update_source_files(
+        "ransomware_001",
+        registry.source_files("ransomware_001"),
+    )
 
     updated = scenario_file.stat()
     assert S_IMODE(updated.st_mode) == S_IMODE(original.st_mode)
@@ -82,9 +95,9 @@ def test_requires_exact_allow_list_and_preserves_scenario_id(tmp_path: Path):
     registry = registry_copy(tmp_path)
     files = registry.source_files("ransomware_001")
     missing = dict(files)
-    missing.pop("facts.yaml")
+    missing.pop("evidence.yaml")
 
-    with pytest.raises(ScenarioValidationError, match="missing files: facts.yaml"):
+    with pytest.raises(ScenarioValidationError, match="missing files: evidence.yaml"):
         registry.update_source_files("ransomware_001", missing)
 
     unsafe = dict(files)
@@ -104,19 +117,14 @@ def test_requires_exact_allow_list_and_preserves_scenario_id(tmp_path: Path):
 
 def test_scenario_sources_api_returns_validation_errors(tmp_path: Path):
     registry = registry_copy(tmp_path)
-    app = FastAPI()
-    app.state.scenarios = registry
-    app.state.llm_provider = FakeLLMProvider()
-    app.include_router(router)
 
-    with TestClient(app) as client:
+    with TestClient(app_for(registry)) as client:
         loaded = client.get("/scenarios/ransomware_001/sources")
         assert loaded.status_code == 200
         assert set(loaded.json()["files"]) == REQUIRED_FILES
-
         files = loaded.json()["files"]
         files["scoring.yaml"] = files["scoring.yaml"].replace(
-            "trigger_fact: F003", "trigger_fact: F999", 1
+            "trigger_evidence: O004", "trigger_evidence: O999", 1
         )
         rejected = client.put(
             "/scenarios/ransomware_001/sources",
@@ -124,54 +132,50 @@ def test_scenario_sources_api_returns_validation_errors(tmp_path: Path):
         )
 
     assert rejected.status_code == 422
-    assert "unknown facts" in rejected.json()["detail"]
+    assert "unknown evidence" in rejected.json()["detail"]
 
 
-def test_authoring_api_round_trips_form_document_to_yaml(tmp_path: Path):
+def test_authoring_api_round_trips_sprint_one_form_document_to_yaml(tmp_path: Path):
     registry = registry_copy(tmp_path)
-    app = FastAPI()
-    app.state.scenarios = registry
-    app.state.llm_provider = FakeLLMProvider()
-    app.include_router(router)
 
-    with TestClient(app) as client:
+    with TestClient(app_for(registry)) as client:
         loaded = client.get("/scenarios/ransomware_001/authoring")
         assert loaded.status_code == 200
         document = loaded.json()["document"]
+        assert {"observations", "findings", "hypotheses", "investigations"}.issubset(
+            document
+        )
         document["scenario"]["name"] = "Form-edited ransomware exercise"
-        document["roles"][0]["responsibilities"].append("preserve evidence")
+        document["observations"][0]["statement"] = "Revised ambiguous signal."
+        document["investigations"][0]["match_hints"].append("trace authentication")
+        document["variants"][0]["investigation_outcomes"][0]["reveal_findings"] = [
+            "FD002"
+        ]
 
         saved = client.put(
             "/scenarios/ransomware_001/authoring",
             json={"document": document},
         )
 
-        assert saved.status_code == 200
-        assert saved.json()["scenario"]["name"] == "Form-edited ransomware exercise"
-        assert "preserve evidence" in saved.json()["document"]["roles"][0][
-            "responsibilities"
-        ]
-        assert "Form-edited ransomware exercise" in registry.source_files(
-            "ransomware_001"
-        )["scenario.yaml"]
+    assert saved.status_code == 200
+    assert saved.json()["scenario"]["name"] == "Form-edited ransomware exercise"
+    files = registry.source_files("ransomware_001")
+    assert "Revised ambiguous signal" in files["evidence.yaml"]
+    assert "trace authentication" in files["investigations.yaml"]
+    assert "FD002" in files["variants.yaml"]
 
 
 def test_authoring_api_rejects_broken_cross_references(tmp_path: Path):
     registry = registry_copy(tmp_path)
-    app = FastAPI()
-    app.state.scenarios = registry
-    app.state.llm_provider = FakeLLMProvider()
-    app.include_router(router)
 
-    with TestClient(app) as client:
-        loaded = client.get("/scenarios/ransomware_001/authoring")
-        document = loaded.json()["document"]
-        document["timeline"][0]["role"] = "missing_role"
+    with TestClient(app_for(registry)) as client:
+        document = client.get("/scenarios/ransomware_001/authoring").json()["document"]
+        document["investigations"][0]["prerequisites"]["all_evidence"] = ["FD999"]
         rejected = client.put(
             "/scenarios/ransomware_001/authoring",
             json={"document": document},
         )
 
     assert rejected.status_code == 422
-    assert "unknown role missing_role" in rejected.json()["detail"]
-    assert registry.get("ransomware_001").timeline[0].role == "soc"
+    assert "unknown evidence" in rejected.json()["detail"]
+    assert registry.get("ransomware_001").investigations[0].id == "I001"

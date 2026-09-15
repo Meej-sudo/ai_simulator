@@ -1,0 +1,113 @@
+investigations:
+  - id: I001
+    label: Inspect authentication source
+    performer_roles:
+      - soc
+    request_description: Determine where the suspicious authentication originated.
+    match_hints:
+      - login source
+      - source ip
+      - authentication origin
+      - where did the login come from
+    prerequisites:
+      all_evidence:
+        - O002
+    duration_minutes: 5
+
+  - id: I002
+    label: Review svc_backup normal behavior
+    performer_roles:
+      - soc
+    request_description: Determine whether the service account behavior is normal.
+    match_hints:
+      - normal behavior
+      - account baseline
+      - usual authentication
+      - does this account normally do this
+    prerequisites:
+      all_evidence:
+        - O002
+    duration_minutes: 5
+
+  - id: I003
+    label: Inspect post-login account activity
+    performer_roles:
+      - soc
+    request_description: Review actions performed by svc_backup after authentication.
+    match_hints:
+      - post login activity
+      - what did the account do
+      - account activity
+      - files accessed after login
+    prerequisites:
+      all_evidence:
+        - O002
+      any_evidence:
+        - O003
+        - FD001
+    duration_minutes: 10
+
+  - id: I004
+    label: Identify outbound destination
+    performer_roles:
+      - soc
+    request_description: Determine where the large outbound transfer was sent.
+    match_hints:
+      - outbound destination
+      - where did the traffic go
+      - where that traffic went
+      - approved service destination
+      - destination belongs to
+    prerequisites:
+      all_evidence:
+        - O004
+    duration_minutes: 5
+
+  - id: I005
+    label: Inspect files accessed before transfer
+    performer_roles:
+      - soc
+    request_description: Identify which files were accessed before the outbound transfer.
+    match_hints:
+      - files accessed
+      - data accessed before transfer
+      - what files were read
+      - customer files
+    prerequisites:
+      all_evidence:
+        - O004
+        - O005
+    duration_minutes: 10
+
+  - id: I006
+    label: Correlate outbound transfer with backup activity
+    performer_roles:
+      - soc
+    request_description: Compare the transfer with approved backup jobs and schedules.
+    match_hints:
+      - backup activity
+      - backup schedule
+      - approved backup
+      - expected backup process
+    prerequisites:
+      all_evidence:
+        - O004
+    duration_minutes: 10
+
+  - id: I007
+    label: Forensically determine transferred content
+    performer_roles:
+      - soc
+    request_description: Determine what content was included in the outbound transfer.
+    match_hints:
+      - transferred content
+      - what data left
+      - forensic transfer review
+      - archive contents
+    prerequisites:
+      all_evidence:
+        - O004
+      any_evidence:
+        - FD004
+        - FD010
+    duration_minutes: 15

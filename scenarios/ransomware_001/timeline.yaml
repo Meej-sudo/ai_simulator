@@ -1,42 +1,36 @@
 events:
   - id: E001
     at_minute: 5
-    type: knowledge_grant
+    type: observation_grant
     role: soc
-    fact_ids: [F005]
+    observation_ids:
+      - O001
 
   - id: E002
     at_minute: 10
-    type: knowledge_grant
+    type: observation_grant
     role: soc
-    fact_ids: [F001]
+    observation_ids:
+      - O002
 
   - id: E003
-    at_minute: 25
-    type: knowledge_grant
+    at_minute: 20
+    type: observation_grant
     role: soc
-    fact_ids: [F002]
+    observation_ids:
+      - O003
 
   - id: E004
     at_minute: 40
-    type: knowledge_grant
+    type: observation_grant
     role: ciso
-    fact_ids: [F002, F005]
+    observation_ids:
+      - O001
 
   - id: E005
     at_minute: 45
-    type: knowledge_grant
+    type: observation_grant
     role: soc
-    fact_ids: [F003, F004]
-
-  - id: E006
-    at_minute: 65
-    type: knowledge_grant
-    role: soc
-    fact_ids: [F006]
-
-  - id: E007
-    at_minute: 80
-    type: knowledge_grant
-    role: soc
-    fact_ids: [F008]
+    observation_ids:
+      - O004
+      - O005
