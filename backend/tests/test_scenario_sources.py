@@ -140,6 +140,9 @@ def test_authoring_api_round_trips_form_document_to_yaml(tmp_path: Path):
         document = loaded.json()["document"]
         document["scenario"]["name"] = "Form-edited ransomware exercise"
         document["roles"][0]["responsibilities"].append("preserve evidence")
+        document["roles"][0]["personality"]["summary"] = (
+            "Methodical investigator who preserves evidence."
+        )
 
         saved = client.put(
             "/scenarios/ransomware_001/authoring",
@@ -151,6 +154,9 @@ def test_authoring_api_round_trips_form_document_to_yaml(tmp_path: Path):
         assert "preserve evidence" in saved.json()["document"]["roles"][0][
             "responsibilities"
         ]
+        assert saved.json()["document"]["roles"][0]["personality"]["summary"] == (
+            "Methodical investigator who preserves evidence."
+        )
         assert "Form-edited ransomware exercise" in registry.source_files(
             "ransomware_001"
         )["scenario.yaml"]

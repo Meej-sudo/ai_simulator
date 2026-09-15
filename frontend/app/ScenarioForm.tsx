@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import type {
   Confidence,
+  PersonalityProfile,
   ScenarioDocument,
   ScoringRule,
   ScoringRuleType,
@@ -28,6 +29,17 @@ const SECTIONS: { id: Section; label: string }[] = [
 ];
 
 const CONFIDENCE_LEVELS: Confidence[] = ["low", "medium", "high", "confirmed"];
+
+const PERSONALITY_TRAITS: {
+  id: keyof PersonalityProfile["traits"];
+  label: string;
+}[] = [
+  { id: "openness", label: "Openness" },
+  { id: "conscientiousness", label: "Conscientiousness" },
+  { id: "extraversion", label: "Extraversion" },
+  { id: "agreeableness", label: "Agreeableness" },
+  { id: "emotional_stability", label: "Emotional stability" },
+];
 
 const RULE_TYPES: { id: ScoringRuleType; label: string }[] = [
   { id: "role_contacted_within", label: "Role contacted within time" },
@@ -545,6 +557,20 @@ export default function ScenarioForm({ document, onChange }: Props) {
                       display_name: "New role",
                       responsibilities: ["Describe this role's responsibility"],
                       communication_style: { tone: "professional", verbosity: "medium" },
+                      personality: {
+                        summary: "Calm, professional, and focused on the role's responsibilities.",
+                        traits: {
+                          openness: "medium",
+                          conscientiousness: "medium",
+                          extraversion: "medium",
+                          agreeableness: "medium",
+                          emotional_stability: "medium",
+                        },
+                        behavioral_tendencies: [
+                          "Communicate clearly and identify what information is still needed.",
+                        ],
+                        under_pressure: "Remain professional and focus on the next useful action.",
+                      },
                       response_guidance: null,
                     },
                   ],
@@ -634,6 +660,82 @@ export default function ScenarioForm({ document, onChange }: Props) {
                         roles: updateAt(document.roles, index, {
                           ...role,
                           responsibilities: lines(event.target.value),
+                        }),
+                      })}
+                    />
+                  </label>
+                  <label className="wide-field">
+                    Personality summary
+                    <textarea
+                      rows={2}
+                      value={role.personality.summary}
+                      onChange={(event) => onChange({
+                        ...document,
+                        roles: updateAt(document.roles, index, {
+                          ...role,
+                          personality: {
+                            ...role.personality,
+                            summary: event.target.value,
+                          },
+                        }),
+                      })}
+                    />
+                  </label>
+                  {PERSONALITY_TRAITS.map((trait) => (
+                    <label key={trait.id}>
+                      {trait.label}
+                      <select
+                        value={role.personality.traits[trait.id]}
+                        onChange={(event) => onChange({
+                          ...document,
+                          roles: updateAt(document.roles, index, {
+                            ...role,
+                            personality: {
+                              ...role.personality,
+                              traits: {
+                                ...role.personality.traits,
+                                [trait.id]: event.target.value as "low" | "medium" | "high",
+                              },
+                            },
+                          }),
+                        })}
+                      >
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                    </label>
+                  ))}
+                  <label className="wide-field">
+                    Behavioral tendencies (one per line)
+                    <textarea
+                      rows={4}
+                      value={role.personality.behavioral_tendencies.join("\n")}
+                      onChange={(event) => onChange({
+                        ...document,
+                        roles: updateAt(document.roles, index, {
+                          ...role,
+                          personality: {
+                            ...role.personality,
+                            behavioral_tendencies: lines(event.target.value),
+                          },
+                        }),
+                      })}
+                    />
+                  </label>
+                  <label className="wide-field">
+                    Behavior under pressure
+                    <textarea
+                      rows={2}
+                      value={role.personality.under_pressure}
+                      onChange={(event) => onChange({
+                        ...document,
+                        roles: updateAt(document.roles, index, {
+                          ...role,
+                          personality: {
+                            ...role.personality,
+                            under_pressure: event.target.value,
+                          },
                         }),
                       })}
                     />

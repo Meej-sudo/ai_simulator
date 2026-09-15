@@ -144,6 +144,7 @@ class SimulationService:
             role_display_name=role.display_name,
             responsibilities=role.responsibilities,
             communication_style=role.communication_style,
+            personality=role.personality,
             response_guidance=role.response_guidance,
             simulation_time=session.simulation_time,
             permitted_facts=facts,

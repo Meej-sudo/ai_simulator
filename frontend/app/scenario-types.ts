@@ -1,5 +1,19 @@
 export type Confidence = "low" | "medium" | "high" | "confirmed";
 export type Verbosity = "low" | "medium" | "high";
+export type PersonalityTraitLevel = "low" | "medium" | "high";
+
+export type PersonalityProfile = {
+  summary: string;
+  traits: {
+    openness: PersonalityTraitLevel;
+    conscientiousness: PersonalityTraitLevel;
+    extraversion: PersonalityTraitLevel;
+    agreeableness: PersonalityTraitLevel;
+    emotional_stability: PersonalityTraitLevel;
+  };
+  behavioral_tendencies: string[];
+  under_pressure: string;
+};
 
 export type DecisionCategory = {
   id: string;
@@ -21,6 +35,7 @@ export type RoleDefinition = {
   display_name: string;
   responsibilities: string[];
   communication_style: { tone: string; verbosity: Verbosity };
+  personality: PersonalityProfile;
   response_guidance: string | null;
 };
 

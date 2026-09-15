@@ -1,4 +1,9 @@
-from app.domain.scenarios.models import CommunicationStyle, FactDefinition
+from app.domain.scenarios.models import (
+    CommunicationStyle,
+    FactDefinition,
+    PersonalityProfile,
+    PersonalityTraits,
+)
 from app.llm.models import ResponseCertainty, RoleResponse, RoleResponseRequest
 from app.llm.validation import ConstrainedRoleResponder
 
@@ -18,6 +23,18 @@ async def test_retries_once_then_returns_safe_fallback():
         role_display_name="SOC Analyst",
         responsibilities=["investigate"],
         communication_style=CommunicationStyle(tone="technical", verbosity="medium"),
+        personality=PersonalityProfile(
+            summary="Calm and skeptical.",
+            traits=PersonalityTraits(
+                openness="high",
+                conscientiousness="high",
+                extraversion="low",
+                agreeableness="medium",
+                emotional_stability="high",
+            ),
+            behavioral_tendencies=["Lead with evidence."],
+            under_pressure="Become more methodical.",
+        ),
         simulation_time=10,
         permitted_facts=[
             FactDefinition(

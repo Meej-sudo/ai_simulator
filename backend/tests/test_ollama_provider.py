@@ -3,7 +3,12 @@ import json
 import httpx
 import pytest
 
-from app.domain.scenarios.models import CommunicationStyle, FactDefinition
+from app.domain.scenarios.models import (
+    CommunicationStyle,
+    FactDefinition,
+    PersonalityProfile,
+    PersonalityTraits,
+)
 from app.llm.errors import LLMProviderError
 from app.llm.models import ResponseCertainty, RoleResponseRequest
 from app.llm.ollama_provider import OllamaLLMProvider
@@ -15,6 +20,18 @@ def role_request() -> RoleResponseRequest:
         role_display_name="SOC Analyst",
         responsibilities=["investigate"],
         communication_style=CommunicationStyle(tone="technical", verbosity="medium"),
+        personality=PersonalityProfile(
+            summary="Calm and skeptical.",
+            traits=PersonalityTraits(
+                openness="high",
+                conscientiousness="high",
+                extraversion="low",
+                agreeableness="medium",
+                emotional_stability="high",
+            ),
+            behavioral_tendencies=["Lead with evidence."],
+            under_pressure="Become more methodical.",
+        ),
         simulation_time=10,
         permitted_facts=[
             FactDefinition(
@@ -61,6 +78,11 @@ async def test_ollama_provider_sends_schema_constrained_chat_request():
     assert captured["model"] == "gpt-oss:120b"
     assert captured["stream"] is False
     assert captured["format"]["additionalProperties"] is False
+    system_prompt = captured["messages"][0]["content"]
+    assert "PERSONALITY" in system_prompt
+    assert "Summary: Calm and skeptical." in system_prompt
+    assert "- Openness: high" in system_prompt
+    assert "Personality affects manner" in system_prompt
     assert captured["messages"][1] == {"role": "user", "content": "What happened?"}
     assert result.certainty == ResponseCertainty.CONFIRMED
     assert result.referenced_fact_ids == ["F001"]

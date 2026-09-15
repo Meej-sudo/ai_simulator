@@ -2,7 +2,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.scenarios.models import CommunicationStyle, FactDefinition
+from app.domain.scenarios.models import (
+    CommunicationStyle,
+    FactDefinition,
+    PersonalityProfile,
+)
 
 
 class ResponseCertainty(StrEnum):
@@ -20,6 +24,7 @@ class RoleResponseRequest(BaseModel):
     role_display_name: str
     responsibilities: list[str]
     communication_style: CommunicationStyle
+    personality: PersonalityProfile
     response_guidance: str | None = None
     simulation_time: int
     permitted_facts: list[FactDefinition]

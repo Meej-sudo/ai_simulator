@@ -3,6 +3,13 @@ from app.llm.models import RoleResponseRequest
 
 def build_system_prompt(request: RoleResponseRequest) -> str:
     responsibilities = "\n".join(f"- {item}" for item in request.responsibilities)
+    personality_traits = "\n".join(
+        f"- {name.replace('_', ' ').title()}: {level}"
+        for name, level in request.personality.traits.model_dump().items()
+    )
+    behavioral_tendencies = "\n".join(
+        f"- {item}" for item in request.personality.behavioral_tendencies
+    )
     knowledge = "\n".join(
         f"- Internal ID {fact.id}: {fact.statement} [confidence: {fact.confidence.value}]"
         for fact in request.permitted_facts
@@ -21,6 +28,15 @@ COMMUNICATION STYLE
 Tone: {request.communication_style.tone}
 Verbosity: {request.communication_style.verbosity}
 Additional guidance: {request.response_guidance or 'None'}
+
+PERSONALITY
+Summary: {request.personality.summary}
+Trait profile:
+{personality_traits}
+Behavioral tendencies:
+{behavioral_tendencies}
+Under pressure: {request.personality.under_pressure}
+Personality affects manner, emphasis, and interaction style only. It must not add facts, change confidence levels, expand authority, or override role responsibilities or knowledge boundaries.
 
 CURRENT SIMULATION TIME
 Minute {request.simulation_time}
