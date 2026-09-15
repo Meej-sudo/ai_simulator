@@ -15,6 +15,8 @@ def test_compiles_example_and_materializes_deterministic_variants():
 
     assert compiled.scenario.id == "ransomware_001"
     assert {role.id for role in compiled.roles} == {"soc", "ciso", "dpo", "ceo"}
+    assert compiled.role("soc").personality.traits.openness == "high"
+    assert compiled.role("ceo").personality.traits.extraversion == "high"
     assert {variant.id for variant in compiled.variants} == {
         "track_alpha",
         "track_bravo",
@@ -121,4 +123,19 @@ def test_rejects_unknown_scoring_decision_category(tmp_path: Path):
     )
 
     with pytest.raises(ScenarioValidationError, match="unknown decision category"):
+        ScenarioCompiler().compile(scenario)
+
+
+def test_rejects_invalid_personality_trait(tmp_path: Path):
+    scenario = tmp_path / "scenario"
+    copytree(SCENARIO, scenario)
+    roles = scenario / "roles.yaml"
+    roles.write_text(
+        roles.read_text(encoding="utf-8").replace(
+            "openness: high", "openness: extreme", 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ScenarioValidationError, match="literal_error"):
         ScenarioCompiler().compile(scenario)
