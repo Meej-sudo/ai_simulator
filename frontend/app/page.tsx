@@ -51,6 +51,82 @@ type CompletedExercise = {
   possibleScore: number;
 };
 
+const DEFAULT_CHARACTER_INTERVAL_MS = 12;
+const MIN_CHARACTER_INTERVAL_MS = 1;
+const MAX_CHARACTER_INTERVAL_MS = 60;
+
+class SmoothedTextRenderer {
+  private characters: string[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private lastChunkAt: number | null = null;
+  private measuredDuration = 0;
+  private measuredCharacters = 0;
+  private characterInterval = DEFAULT_CHARACTER_INTERVAL_MS;
+  private inputComplete = false;
+  private resolveComplete: (() => void) | null = null;
+  private readonly completion = new Promise<void>((resolve) => {
+    this.resolveComplete = resolve;
+  });
+
+  constructor(private readonly renderCharacter: (character: string) => void) {}
+
+  enqueue(content: string) {
+    const incomingCharacters = Array.from(content);
+    if (incomingCharacters.length === 0) return;
+
+    const now = performance.now();
+    if (this.lastChunkAt !== null) {
+      this.measuredDuration += now - this.lastChunkAt;
+      this.measuredCharacters += incomingCharacters.length;
+      this.characterInterval = Math.min(
+        MAX_CHARACTER_INTERVAL_MS,
+        Math.max(
+          MIN_CHARACTER_INTERVAL_MS,
+          this.measuredDuration / this.measuredCharacters,
+        ),
+      );
+    }
+    this.lastChunkAt = now;
+    this.characters.push(...incomingCharacters);
+    this.scheduleNextCharacter();
+  }
+
+  finish() {
+    this.inputComplete = true;
+    this.resolveIfComplete();
+    return this.completion;
+  }
+
+  stop() {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.characters = [];
+    this.inputComplete = true;
+    this.resolveIfComplete();
+  }
+
+  private scheduleNextCharacter() {
+    if (this.timer !== null || this.characters.length === 0) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const character = this.characters.shift();
+      if (character !== undefined) this.renderCharacter(character);
+      if (this.characters.length > 0) {
+        this.scheduleNextCharacter();
+      } else {
+        this.resolveIfComplete();
+      }
+    }, this.characterInterval);
+  }
+
+  private resolveIfComplete() {
+    if (this.inputComplete && this.characters.length === 0 && this.timer === null) {
+      this.resolveComplete?.();
+      this.resolveComplete = null;
+    }
+  }
+}
+
 export default function Home() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenarioId, setScenarioId] = useState("");
@@ -198,19 +274,25 @@ export default function Home() {
       if (!session) return;
       setAnswer("");
       setAnswerStreaming(true);
+      const renderer = new SmoothedTextRenderer((character) => {
+        setAnswer((current) => current + character);
+      });
       try {
         for await (const event of streamApi(`/sessions/${session.id}/ask/stream`, {
           method: "POST",
           body: JSON.stringify({ target_role: targetRole, message: question }),
         })) {
           if (event.type === "delta") {
-            setAnswer((current) => current + event.content);
+            renderer.enqueue(event.content);
           } else if (event.type === "error") {
             throw new Error(event.detail);
           }
         }
+        await renderer.finish();
+        setAnswerStreaming(false);
         await refresh();
       } finally {
+        renderer.stop();
         setAnswerStreaming(false);
       }
     });
@@ -369,7 +451,24 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
+              <textarea
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    if (!busy && question.trim()) {
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }
+                }}
+                rows={3}
+                title="Press Enter to send, or Shift+Enter for a new line"
+              />
               <button disabled={busy || !question.trim()}>Send question</button>
             </form>
             {(answer || answerStreaming) && (
