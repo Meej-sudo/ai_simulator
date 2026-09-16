@@ -14,7 +14,7 @@ from app.models.database import Base
 from app.services.scenario_registry import ScenarioRegistry
 
 
-SCENARIOS = Path(__file__).resolve().parents[2] / "scenarios"
+SCENARIOS = Path(__file__).resolve().parents[2] / "content" / "scenarios"
 
 
 def make_app(tmp_path: Path, provider=None) -> FastAPI:
@@ -58,6 +58,8 @@ def test_http_sprint_one_discovery_workflow_and_leakage_boundaries(tmp_path: Pat
             json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
         )
         assert created.status_code == 201
+        assert len(created.json()["scenario_version"]) == 64
+        assert "scenario_snapshot" not in created.json()
         session_id = created.json()["id"]
         assert client.post(f"/sessions/{session_id}/start").status_code == 200
         assert client.post(

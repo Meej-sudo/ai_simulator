@@ -19,7 +19,7 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://trainer:trainer@db:5432/trainer
-      SCENARIOS_PATH: /app/scenarios
+      SCENARIOS_PATH: /app/content/scenarios
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
@@ -27,7 +27,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gpt-oss:120b}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-300}
     volumes:
-      - ./scenarios:/app/scenarios:rw
+      - ./content:/app/content:rw
     depends_on:
       db:
         condition: service_healthy

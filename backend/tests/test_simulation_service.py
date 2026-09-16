@@ -13,7 +13,7 @@ from app.services.scenario_registry import ScenarioRegistry
 from app.services.simulation import SimulationService
 
 
-SCENARIOS = Path(__file__).resolve().parents[2] / "scenarios"
+SCENARIOS = Path(__file__).resolve().parents[2] / "content" / "scenarios"
 
 
 def make_service() -> SimulationService:
@@ -270,3 +270,20 @@ def test_decision_category_must_be_defined_by_scenario():
         service.make_decision(
             session.id, "ciso", "hidden_answer", "Do something.", None, None
         )
+
+
+def test_session_is_pinned_to_immutable_variant_snapshot():
+    service = make_service()
+    session = started(service)
+    original_name = service._runtime_scenario(session).scenario.name
+    original_version = session.scenario_version
+
+    service.scenarios.get("ransomware_001").scenario.name = "Edited after start"
+
+    restored = service._runtime_scenario(session)
+    assert restored.scenario.name == original_name
+    assert session.scenario_version == original_version
+    assert len(original_version) == 64
+    assert "variants" not in session.scenario_snapshot
+    assert session.scenario_snapshot["variant_id"] == "track_alpha"
+    assert "investigation_outcomes" in session.scenario_snapshot

@@ -1,9 +1,12 @@
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import ValidationError
+from yaml.constructor import ConstructorError
 
 from .models import (
     CompiledScenario,
@@ -25,8 +28,35 @@ class ScenarioValidationError(ValueError):
     pass
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate mapping key: {key}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 class ScenarioCompiler:
-    REQUIRED_FILES = (
+    SCHEMA_VERSION = 2
+    REQUIRED_FILES = ("definition.yaml", "variants.yaml")
+    LEGACY_REQUIRED_FILES = (
         "scenario.yaml",
         "roles.yaml",
         "external_entities.yaml",
@@ -38,12 +68,173 @@ class ScenarioCompiler:
         "scoring.yaml",
     )
 
+    def __init__(self, catalog_root: str | Path | None = None):
+        self.catalog_root = Path(catalog_root) if catalog_root else None
+
+    def required_files_for(self, directory: str | Path) -> tuple[str, ...]:
+        path = Path(directory)
+        if (path / "definition.yaml").is_file():
+            return self.REQUIRED_FILES
+        return self.LEGACY_REQUIRED_FILES
+
     def compile(self, directory: str | Path) -> CompiledScenario:
         path = Path(directory)
-        missing = [name for name in self.REQUIRED_FILES if not (path / name).is_file()]
-        if missing:
-            raise ScenarioValidationError(f"missing scenario files: {', '.join(missing)}")
+        if (path / "definition.yaml").is_file():
+            return self._compile_v2(path)
+        return self._compile_legacy(path)
 
+    def _compile_v2(self, path: Path) -> CompiledScenario:
+        self._require_files(path, self.REQUIRED_FILES)
+        try:
+            definition = self._load(path / "definition.yaml")
+            variants_document = self._load(path / "variants.yaml")
+            self._require_keys(
+                definition,
+                {
+                    "schema_version",
+                    "scenario",
+                    "participants",
+                    "decision_categories",
+                    "hypotheses",
+                    "evidence",
+                    "investigations",
+                    "timeline",
+                    "scoring",
+                },
+                context="definition.yaml",
+            )
+            self._require_keys(
+                variants_document,
+                {"schema_version", "scenario_id", "variants"},
+                context="variants.yaml",
+            )
+            self._require_schema_version(definition, "definition.yaml")
+            self._require_schema_version(variants_document, "variants.yaml")
+
+            raw_metadata = self._mapping(definition, "scenario")
+            self._require_keys(
+                raw_metadata,
+                {"id", "name", "description", "duration_minutes"},
+                context="definition.yaml scenario",
+            )
+            raw_metadata = {
+                **raw_metadata,
+                "decision_categories": self._list(
+                    definition, "decision_categories"
+                ),
+            }
+            metadata = ScenarioMetadata.model_validate(raw_metadata)
+            if variants_document["scenario_id"] != metadata.id:
+                raise ScenarioValidationError(
+                    "variants.yaml scenario_id must match definition.yaml scenario.id"
+                )
+
+            participants = self._mapping(definition, "participants")
+            self._require_keys(
+                participants,
+                {"roles", "external_entities"},
+                context="definition.yaml participants",
+            )
+            roles = self._resolve_roles(self._list_any(participants, "roles"), path)
+            external_entities = self._resolve_external_entities(
+                self._list_any(participants, "external_entities"),
+                path,
+            )
+
+            evidence = self._mapping(definition, "evidence")
+            self._require_keys(
+                evidence,
+                {"observations", "findings"},
+                context="definition.yaml evidence",
+            )
+            raw_observations = self._list(evidence, "observations")
+            raw_findings = self._list(evidence, "findings")
+            raw_hypotheses = self._list(definition, "hypotheses")
+            raw_investigations = self._list(definition, "investigations")
+            raw_rules = self._list(definition, "scoring")
+
+            raw_timeline: list[dict[str, Any]] = []
+            for item in self._list(definition, "timeline"):
+                self._require_keys(
+                    item,
+                    {"id", "at_minute", "role", "reveal_observations"},
+                    context=f"timeline event {item.get('id', '<unknown>')}",
+                )
+                raw_timeline.append(
+                    {
+                        "id": item["id"],
+                        "at_minute": item["at_minute"],
+                        "type": "observation_grant",
+                        "role": item["role"],
+                        "observation_ids": item["reveal_observations"],
+                    }
+                )
+
+            raw_variants: list[dict[str, Any]] = []
+            for item in self._list(variants_document, "variants"):
+                self._require_keys(
+                    item,
+                    {"id", "name", "ground_truth", "investigation_outcomes"},
+                    {
+                        "observation_overrides",
+                        "timeline_overrides",
+                    },
+                    context=f"variant {item.get('id', '<unknown>')}",
+                )
+                outcomes = item["investigation_outcomes"]
+                if not isinstance(outcomes, dict):
+                    raise TypeError("investigation_outcomes must be a mapping")
+                raw_outcomes = []
+                for investigation_id, outcome in outcomes.items():
+                    self._require_keys(
+                        outcome,
+                        {"reveal_findings"},
+                        context=(
+                            f"variant {item.get('id', '<unknown>')} outcome "
+                            f"{investigation_id}"
+                        ),
+                    )
+                    raw_outcomes.append(
+                        {
+                            "investigation_id": investigation_id,
+                            "reveal_findings": outcome["reveal_findings"],
+                        }
+                    )
+                raw_variants.append(
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "ground_truth": item["ground_truth"],
+                        "observation_overrides": item.get(
+                            "observation_overrides", []
+                        ),
+                        "timeline_overrides": item.get("timeline_overrides", []),
+                        "investigation_outcomes": raw_outcomes,
+                    }
+                )
+
+            compiled = self._build_compiled(
+                metadata=metadata,
+                roles=roles,
+                external_entities=external_entities,
+                raw_observations=raw_observations,
+                raw_findings=raw_findings,
+                raw_hypotheses=raw_hypotheses,
+                raw_investigations=raw_investigations,
+                raw_timeline=raw_timeline,
+                raw_variants=raw_variants,
+                raw_rules=raw_rules,
+            )
+        except ScenarioValidationError:
+            raise
+        except (KeyError, TypeError, ValidationError, yaml.YAMLError) as exc:
+            raise ScenarioValidationError(str(exc)) from exc
+
+        self._cross_validate(compiled)
+        return compiled
+
+    def _compile_legacy(self, path: Path) -> CompiledScenario:
+        self._require_files(path, self.LEGACY_REQUIRED_FILES)
         try:
             metadata = ScenarioMetadata.model_validate(
                 self._load(path / "scenario.yaml")["scenario"]
@@ -53,57 +244,97 @@ class ScenarioCompiler:
                 self._load(path / "external_entities.yaml"), "external_entities"
             )
             evidence = self._load(path / "evidence.yaml")
-            raw_observations = self._list(evidence, "observations")
-            raw_findings = self._list(evidence, "findings")
-            raw_hypotheses = self._list(
-                self._load(path / "hypotheses.yaml"), "hypotheses"
-            )
-            raw_investigations = self._list(
-                self._load(path / "investigations.yaml"), "investigations"
-            )
-            raw_timeline = self._list(self._load(path / "timeline.yaml"), "events")
-            raw_variants = self._list(self._load(path / "variants.yaml"), "variants")
-            raw_rules = self._list(self._load(path / "scoring.yaml"), "rules")
-            self._ensure_unique("role", raw_roles)
-            self._ensure_unique("external entity", raw_external_entities)
-            self._ensure_unique("observation", raw_observations)
-            self._ensure_unique("finding", raw_findings)
-            self._ensure_unique("hypothesis", raw_hypotheses)
-            self._ensure_unique("investigation", raw_investigations)
-            self._ensure_unique("timeline event", raw_timeline)
-            self._ensure_unique("variant", raw_variants)
-            self._ensure_unique("scoring rule", raw_rules)
-            compiled = CompiledScenario(
-                scenario=metadata,
+            compiled = self._build_compiled(
+                metadata=metadata,
                 roles=[RoleDefinition.model_validate(item) for item in raw_roles],
                 external_entities=[
                     ExternalEntityDefinition.model_validate(item)
                     for item in raw_external_entities
                 ],
-                observations=[
-                    ObservationDefinition.model_validate(item)
-                    for item in raw_observations
-                ],
-                findings=[
-                    FindingDefinition.model_validate(item) for item in raw_findings
-                ],
-                hypotheses=[
-                    HypothesisDefinition.model_validate(item)
-                    for item in raw_hypotheses
-                ],
-                investigations=[
-                    InvestigationDefinition.model_validate(item)
-                    for item in raw_investigations
-                ],
-                timeline=[TimelineEvent.model_validate(item) for item in raw_timeline],
-                variants=[VariantDefinition.model_validate(item) for item in raw_variants],
-                scoring_rules=[ScoringRule.model_validate(item) for item in raw_rules],
+                raw_observations=self._list(evidence, "observations"),
+                raw_findings=self._list(evidence, "findings"),
+                raw_hypotheses=self._list(
+                    self._load(path / "hypotheses.yaml"), "hypotheses"
+                ),
+                raw_investigations=self._list(
+                    self._load(path / "investigations.yaml"), "investigations"
+                ),
+                raw_timeline=self._list(
+                    self._load(path / "timeline.yaml"), "events"
+                ),
+                raw_variants=self._list(
+                    self._load(path / "variants.yaml"), "variants"
+                ),
+                raw_rules=self._list(
+                    self._load(path / "scoring.yaml"), "rules"
+                ),
             )
+        except ScenarioValidationError:
+            raise
         except (KeyError, TypeError, ValidationError, yaml.YAMLError) as exc:
             raise ScenarioValidationError(str(exc)) from exc
 
         self._cross_validate(compiled)
         return compiled
+
+    def _build_compiled(
+        self,
+        *,
+        metadata: ScenarioMetadata,
+        roles: list[RoleDefinition],
+        external_entities: list[ExternalEntityDefinition],
+        raw_observations: list[dict[str, Any]],
+        raw_findings: list[dict[str, Any]],
+        raw_hypotheses: list[dict[str, Any]],
+        raw_investigations: list[dict[str, Any]],
+        raw_timeline: list[dict[str, Any]],
+        raw_variants: list[dict[str, Any]],
+        raw_rules: list[dict[str, Any]],
+    ) -> CompiledScenario:
+        collections = (
+            ("role", [item.model_dump() for item in roles]),
+            (
+                "external entity",
+                [item.model_dump() for item in external_entities],
+            ),
+            ("observation", raw_observations),
+            ("finding", raw_findings),
+            ("hypothesis", raw_hypotheses),
+            ("investigation", raw_investigations),
+            ("timeline event", raw_timeline),
+            ("variant", raw_variants),
+            ("scoring rule", raw_rules),
+        )
+        for kind, items in collections:
+            self._ensure_unique(kind, items)
+
+        return CompiledScenario(
+            scenario=metadata,
+            roles=roles,
+            external_entities=external_entities,
+            observations=[
+                ObservationDefinition.model_validate(item)
+                for item in raw_observations
+            ],
+            findings=[
+                FindingDefinition.model_validate(item) for item in raw_findings
+            ],
+            hypotheses=[
+                HypothesisDefinition.model_validate(item)
+                for item in raw_hypotheses
+            ],
+            investigations=[
+                InvestigationDefinition.model_validate(item)
+                for item in raw_investigations
+            ],
+            timeline=[TimelineEvent.model_validate(item) for item in raw_timeline],
+            variants=[
+                VariantDefinition.model_validate(item) for item in raw_variants
+            ],
+            scoring_rules=[
+                ScoringRule.model_validate(item) for item in raw_rules
+            ],
+        )
 
     def materialize(
         self, compiled: CompiledScenario, variant_id: str
@@ -167,25 +398,328 @@ class ScenarioCompiler:
         )
         return runtime
 
+    def serialize_definition(
+        self,
+        compiled: CompiledScenario,
+        scenario_directory: str | Path,
+    ) -> dict[str, Any]:
+        path = Path(scenario_directory)
+        role_catalog = self._role_catalog(path)
+        entity_catalog = self._external_entity_catalog(path)
+        scenario = compiled.scenario.model_dump(
+            mode="json",
+            exclude={"decision_categories"},
+            exclude_none=True,
+        )
+        return {
+            "schema_version": self.SCHEMA_VERSION,
+            "scenario": scenario,
+            "participants": {
+                "roles": [
+                    self._serialize_catalog_item(item, role_catalog)
+                    for item in compiled.roles
+                ],
+                "external_entities": [
+                    self._serialize_catalog_item(item, entity_catalog)
+                    for item in compiled.external_entities
+                ],
+            },
+            "decision_categories": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in compiled.scenario.decision_categories
+            ],
+            "hypotheses": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in compiled.hypotheses
+            ],
+            "evidence": {
+                "observations": [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in compiled.observations
+                ],
+                "findings": [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in compiled.findings
+                ],
+            },
+            "investigations": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in compiled.investigations
+            ],
+            "timeline": [
+                {
+                    "id": item.id,
+                    "at_minute": item.at_minute,
+                    "role": item.role,
+                    "reveal_observations": item.observation_ids,
+                }
+                for item in compiled.timeline
+            ],
+            "scoring": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in compiled.scoring_rules
+            ],
+        }
+
+    def serialize_variants(self, compiled: CompiledScenario) -> dict[str, Any]:
+        return {
+            "schema_version": self.SCHEMA_VERSION,
+            "scenario_id": compiled.scenario.id,
+            "variants": [
+                {
+                    "id": variant.id,
+                    "name": variant.name,
+                    "ground_truth": variant.ground_truth,
+                    "observation_overrides": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in variant.observation_overrides
+                    ],
+                    "timeline_overrides": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in variant.timeline_overrides
+                    ],
+                    "investigation_outcomes": {
+                        outcome.investigation_id: {
+                            "reveal_findings": outcome.reveal_findings
+                        }
+                        for outcome in variant.investigation_outcomes
+                    },
+                }
+                for variant in compiled.variants
+            ],
+        }
+
+    @staticmethod
+    def content_version(compiled: CompiledScenario) -> str:
+        payload = json.dumps(
+            compiled.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _resolve_roles(
+        self, items: list[Any], scenario_directory: Path
+    ) -> list[RoleDefinition]:
+        return self._resolve_catalog_items(
+            items,
+            self._role_catalog(scenario_directory),
+            RoleDefinition,
+            "role",
+        )
+
+    def _resolve_external_entities(
+        self, items: list[Any], scenario_directory: Path
+    ) -> list[ExternalEntityDefinition]:
+        return self._resolve_catalog_items(
+            items,
+            self._external_entity_catalog(scenario_directory),
+            ExternalEntityDefinition,
+            "external entity",
+        )
+
+    def _resolve_catalog_items(self, items, catalog, model, kind):
+        resolved = []
+        for item in items:
+            if isinstance(item, str):
+                reference = item
+                overrides = {}
+            elif isinstance(item, dict) and "ref" in item:
+                self._require_keys(
+                    item,
+                    {"ref"},
+                    {"overrides"},
+                    context=f"{kind} reference",
+                )
+                reference = item["ref"]
+                overrides = item.get("overrides", {})
+                if not isinstance(overrides, dict):
+                    raise TypeError(f"{kind} overrides must be a mapping")
+            elif isinstance(item, dict):
+                resolved.append(model.model_validate(item))
+                continue
+            else:
+                raise TypeError(
+                    f"{kind} participant must be a catalog ID or mapping"
+                )
+            try:
+                base = catalog[reference].model_dump(mode="json")
+            except KeyError as exc:
+                raise ScenarioValidationError(
+                    f"unknown {kind} catalog reference: {reference}"
+                ) from exc
+            resolved.append(
+                model.model_validate(self._deep_merge(base, overrides))
+            )
+        return resolved
+
+    def _role_catalog(
+        self, scenario_directory: Path
+    ) -> dict[str, RoleDefinition]:
+        raw = self._load_catalog(scenario_directory, "roles.yaml", "roles")
+        return {
+            item_id: RoleDefinition.model_validate({"id": item_id, **value})
+            for item_id, value in raw.items()
+        }
+
+    def _external_entity_catalog(
+        self, scenario_directory: Path
+    ) -> dict[str, ExternalEntityDefinition]:
+        raw = self._load_catalog(
+            scenario_directory,
+            "external_entities.yaml",
+            "external_entities",
+        )
+        return {
+            item_id: ExternalEntityDefinition.model_validate(
+                {"id": item_id, **value}
+            )
+            for item_id, value in raw.items()
+        }
+
+    def _load_catalog(
+        self,
+        scenario_directory: Path,
+        filename: str,
+        key: str,
+    ) -> dict[str, dict[str, Any]]:
+        root = self.catalog_root or scenario_directory.parent.parent / "catalogs"
+        path = root / filename
+        if not path.is_file():
+            raise ScenarioValidationError(f"missing catalog file: {path}")
+        document = self._load(path)
+        self._require_keys(
+            document,
+            {"schema_version", key},
+            context=filename,
+        )
+        self._require_schema_version(document, filename)
+        values = document[key]
+        if not isinstance(values, dict):
+            raise TypeError(f"{filename} {key} must be a mapping")
+        for item_id, value in values.items():
+            if not isinstance(value, dict):
+                raise TypeError(f"{filename} entry {item_id} must be a mapping")
+        return values
+
+    @staticmethod
+    def _serialize_catalog_item(item, catalog):
+        current = item.model_dump(mode="json")
+        catalog_item = catalog.get(item.id)
+        if catalog_item is None:
+            return item.model_dump(mode="json", exclude_none=True)
+        base = catalog_item.model_dump(mode="json")
+        if current == base:
+            return item.id
+        changes = ScenarioCompiler._deep_changes(base, current)
+        changes.pop("id", None)
+        return {"ref": item.id, "overrides": changes}
+
+    @staticmethod
+    def _deep_changes(base: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        changes = {}
+        for key, value in current.items():
+            base_value = base.get(key)
+            if isinstance(value, dict) and isinstance(base_value, dict):
+                nested = ScenarioCompiler._deep_changes(base_value, value)
+                if nested:
+                    changes[key] = nested
+            elif value != base_value:
+                changes[key] = value
+        return changes
+
+    @staticmethod
+    def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+        merged = deepcopy(base)
+        for key, value in overrides.items():
+            if (
+                isinstance(value, dict)
+                and isinstance(merged.get(key), dict)
+            ):
+                merged[key] = ScenarioCompiler._deep_merge(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
     @staticmethod
     def _load(path: Path) -> dict[str, Any]:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
         if not isinstance(data, dict):
             raise TypeError(f"{path.name} must contain a mapping")
         return data
 
     @staticmethod
+    def _mapping(data: dict[str, Any], key: str) -> dict[str, Any]:
+        value = data[key]
+        if not isinstance(value, dict):
+            raise TypeError(f"{key} must be a mapping")
+        return value
+
+    @staticmethod
     def _list(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
+        value = data[key]
+        if not isinstance(value, list) or not all(
+            isinstance(item, dict) for item in value
+        ):
+            raise TypeError(f"{key} must be a list of mappings")
+        return value
+
+    @staticmethod
+    def _list_any(data: dict[str, Any], key: str) -> list[Any]:
         value = data[key]
         if not isinstance(value, list):
             raise TypeError(f"{key} must be a list")
         return value
 
     @staticmethod
+    def _require_files(path: Path, names: tuple[str, ...]) -> None:
+        missing = [name for name in names if not (path / name).is_file()]
+        if missing:
+            raise ScenarioValidationError(
+                f"missing scenario files: {', '.join(missing)}"
+            )
+
+    def _require_schema_version(
+        self, document: dict[str, Any], filename: str
+    ) -> None:
+        if document["schema_version"] != self.SCHEMA_VERSION:
+            raise ScenarioValidationError(
+                f"{filename} requires schema_version {self.SCHEMA_VERSION}"
+            )
+
+    @staticmethod
+    def _require_keys(
+        value: dict[str, Any],
+        required: set[str],
+        optional: set[str] | None = None,
+        *,
+        context: str,
+    ) -> None:
+        if not isinstance(value, dict):
+            raise TypeError(f"{context} must be a mapping")
+        optional = optional or set()
+        present = set(value)
+        missing = sorted(required - present)
+        unexpected = sorted(present - required - optional)
+        problems = []
+        if missing:
+            problems.append(f"missing keys: {', '.join(missing)}")
+        if unexpected:
+            problems.append(f"unexpected keys: {', '.join(unexpected)}")
+        if problems:
+            raise ScenarioValidationError(
+                f"{context}: {'; '.join(problems)}"
+            )
+
+    @staticmethod
     def _ensure_unique(kind: str, items: list[dict[str, Any]]) -> None:
         ids = [item.get("id") for item in items]
         duplicates = sorted(
-            {item_id for item_id in ids if item_id is not None and ids.count(item_id) > 1}
+            {
+                item_id
+                for item_id in ids
+                if item_id is not None and ids.count(item_id) > 1
+            }
         )
         if duplicates:
             raise ScenarioValidationError(
