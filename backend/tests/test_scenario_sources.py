@@ -71,7 +71,7 @@ def test_invalid_source_does_not_change_files_or_registry(tmp_path: Path):
     original = registry.source_files("ransomware_001")
     invalid = dict(original)
     definition = yaml.safe_load(invalid["definition.yaml"])
-    definition["timeline"][0]["role"] = "arbitrary_file"
+    definition["events"][0]["role"] = "arbitrary_file"
     invalid["definition.yaml"] = yaml.safe_dump(definition, sort_keys=False)
 
     with pytest.raises(ScenarioValidationError, match="unknown role arbitrary_file"):
@@ -128,7 +128,7 @@ def test_scenario_sources_api_returns_two_files_and_validation_errors(tmp_path: 
     assert "unknown evidence" in rejected.json()["detail"]
 
 
-def test_authoring_round_trip_preserves_catalog_refs_and_writes_overrides(
+def test_authoring_round_trip_writes_roles_to_shared_catalog_and_keeps_refs(
     tmp_path: Path,
 ):
     registry = registry_copy(tmp_path)
@@ -167,23 +167,28 @@ def test_authoring_round_trip_preserves_catalog_refs_and_writes_overrides(
     definition = yaml.safe_load(files["definition.yaml"])
     assert "Revised ambiguous signal" in files["definition.yaml"]
     assert "trace authentication" in files["definition.yaml"]
-    assert definition["participants"]["roles"][0] == {
-        "ref": "soc",
-        "overrides": {
-            "communication_style": {"tone": "calm and technical"},
-            "personality": {
-                "summary": "Methodical investigator who preserves evidence."
-            },
-        },
-    }
+    assert definition["participants"]["roles"][0] == "soc"
+    assert "events" in definition
+    assert "timeline" not in definition
     assert "FD002" in files["variants.yaml"]
-    assert (
+    updated_catalog_text = (
         registry.catalog_root / "roles.yaml"
-    ).read_text(encoding="utf-8") == original_catalog
+    ).read_text(encoding="utf-8")
+    assert updated_catalog_text != original_catalog
+    updated_catalog = yaml.safe_load(updated_catalog_text)
+    assert updated_catalog["roles"]["soc"]["communication_style"]["tone"] == (
+        "calm and technical"
+    )
+    assert updated_catalog["roles"]["soc"]["personality"]["summary"] == (
+        "Methodical investigator who preserves evidence."
+    )
 
 
 def test_authoring_api_rejects_broken_cross_references(tmp_path: Path):
     registry = registry_copy(tmp_path)
+    original_catalog = (
+        registry.catalog_root / "roles.yaml"
+    ).read_text(encoding="utf-8")
 
     with TestClient(app_for(registry)) as client:
         document = client.get(
@@ -192,6 +197,7 @@ def test_authoring_api_rejects_broken_cross_references(tmp_path: Path):
         document["investigations"][0]["prerequisites"]["all_evidence"] = [
             "FD999"
         ]
+        document["roles"][0]["display_name"] = "Must not be published"
         rejected = client.put(
             "/scenarios/ransomware_001/authoring",
             json={"document": document},
@@ -200,6 +206,9 @@ def test_authoring_api_rejects_broken_cross_references(tmp_path: Path):
     assert rejected.status_code == 422
     assert "unknown evidence" in rejected.json()["detail"]
     assert registry.get("ransomware_001").investigations[0].id == "I001"
+    assert (
+        registry.catalog_root / "roles.yaml"
+    ).read_text(encoding="utf-8") == original_catalog
 
 
 def test_registry_retains_previous_compiled_version_after_authoring_update(

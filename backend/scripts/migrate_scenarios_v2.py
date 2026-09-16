@@ -59,7 +59,7 @@ def main() -> int:
     if not legacy_directories:
         raise SystemExit(f"No legacy scenario directories found in {source}")
 
-    legacy_compiler = ScenarioCompiler()
+    legacy_compiler = ScenarioCompiler(catalogs)
     version_two_compiler = ScenarioCompiler(catalogs)
     planned = []
     for legacy_directory in legacy_directories:

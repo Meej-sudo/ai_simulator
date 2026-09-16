@@ -11,24 +11,7 @@ participants:
   - ciso
   - dpo
   - ceo
-  - id: role_5
-    display_name: New role
-    responsibilities:
-    - Describe this role's responsibility
-    communication_style:
-      tone: professional
-      verbosity: medium
-    personality:
-      summary: Calm, professional, and focused on the role's responsibilities.
-      traits:
-        openness: medium
-        conscientiousness: medium
-        extraversion: medium
-        agreeableness: medium
-        emotional_stability: medium
-      behavioral_tendencies:
-      - Communicate clearly and identify what information is still needed.
-      under_pressure: Remain professional and focus on the next useful action.
+  - role_5
   external_entities:
   - slovenian_dpa
   - police
@@ -251,7 +234,7 @@ investigations:
     - FD010
   duration_minutes: 15
   repeatable: false
-timeline:
+events:
 - id: E001
   at_minute: 5
   role: soc

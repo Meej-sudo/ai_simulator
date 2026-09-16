@@ -98,7 +98,7 @@ class ScenarioCompiler:
                     "hypotheses",
                     "evidence",
                     "investigations",
-                    "timeline",
+                    "events",
                     "scoring",
                 },
                 context="definition.yaml",
@@ -135,7 +135,13 @@ class ScenarioCompiler:
                 {"roles", "external_entities"},
                 context="definition.yaml participants",
             )
-            roles = self._resolve_roles(self._list_any(participants, "roles"), path)
+            raw_roles = self._list_any(participants, "roles")
+            if not all(isinstance(item, str) for item in raw_roles):
+                raise ScenarioValidationError(
+                    "definition.yaml participants.roles must contain only role "
+                    "catalog IDs"
+                )
+            roles = self._resolve_roles(raw_roles, path)
             external_entities = self._resolve_external_entities(
                 self._list_any(participants, "external_entities"),
                 path,
@@ -154,11 +160,11 @@ class ScenarioCompiler:
             raw_rules = self._list(definition, "scoring")
 
             raw_timeline: list[dict[str, Any]] = []
-            for item in self._list(definition, "timeline"):
+            for item in self._list(definition, "events"):
                 self._require_keys(
                     item,
                     {"id", "at_minute", "role", "reveal_observations"},
-                    context=f"timeline event {item.get('id', '<unknown>')}",
+                    context=f"event {item.get('id', '<unknown>')}",
                 )
                 raw_timeline.append(
                     {
@@ -177,7 +183,7 @@ class ScenarioCompiler:
                     {"id", "name", "ground_truth", "investigation_outcomes"},
                     {
                         "observation_overrides",
-                        "timeline_overrides",
+                        "event_overrides",
                     },
                     context=f"variant {item.get('id', '<unknown>')}",
                 )
@@ -208,7 +214,7 @@ class ScenarioCompiler:
                         "observation_overrides": item.get(
                             "observation_overrides", []
                         ),
-                        "timeline_overrides": item.get("timeline_overrides", []),
+                        "timeline_overrides": item.get("event_overrides", []),
                         "investigation_outcomes": raw_outcomes,
                     }
                 )
@@ -246,7 +252,7 @@ class ScenarioCompiler:
             evidence = self._load(path / "evidence.yaml")
             compiled = self._build_compiled(
                 metadata=metadata,
-                roles=[RoleDefinition.model_validate(item) for item in raw_roles],
+                roles=self._legacy_roles(raw_roles, path),
                 external_entities=[
                     ExternalEntityDefinition.model_validate(item)
                     for item in raw_external_entities
@@ -276,6 +282,41 @@ class ScenarioCompiler:
 
         self._cross_validate(compiled)
         return compiled
+
+    def _legacy_roles(
+        self, items: list[dict[str, Any]], scenario_directory: Path
+    ) -> list[RoleDefinition]:
+        catalog: dict[str, RoleDefinition] = {}
+        if self.catalog_root is not None:
+            catalog = self._role_catalog(scenario_directory)
+        neutral_personality = {
+            "summary": "Professional and focused on the role responsibilities.",
+            "traits": {
+                "openness": "medium",
+                "conscientiousness": "medium",
+                "extraversion": "medium",
+                "agreeableness": "medium",
+                "emotional_stability": "medium",
+            },
+            "behavioral_tendencies": [
+                "Communicate clearly and identify missing information."
+            ],
+            "under_pressure": (
+                "Remain professional and focus on the next useful action."
+            ),
+        }
+        roles = []
+        for item in items:
+            value = deepcopy(item)
+            if "personality" not in value:
+                catalog_role = catalog.get(value.get("id"))
+                value["personality"] = (
+                    catalog_role.personality.model_dump(mode="json")
+                    if catalog_role is not None
+                    else deepcopy(neutral_personality)
+                )
+            roles.append(RoleDefinition.model_validate(value))
+        return roles
 
     def _build_compiled(
         self,
@@ -402,9 +443,11 @@ class ScenarioCompiler:
         self,
         compiled: CompiledScenario,
         scenario_directory: str | Path,
+        role_catalog: dict[str, RoleDefinition] | None = None,
     ) -> dict[str, Any]:
         path = Path(scenario_directory)
-        role_catalog = self._role_catalog(path)
+        if role_catalog is None:
+            role_catalog = self._role_catalog(path)
         entity_catalog = self._external_entity_catalog(path)
         scenario = compiled.scenario.model_dump(
             mode="json",
@@ -416,7 +459,7 @@ class ScenarioCompiler:
             "scenario": scenario,
             "participants": {
                 "roles": [
-                    self._serialize_catalog_item(item, role_catalog)
+                    self._serialize_role_reference(item, role_catalog)
                     for item in compiled.roles
                 ],
                 "external_entities": [
@@ -446,7 +489,7 @@ class ScenarioCompiler:
                 item.model_dump(mode="json", exclude_none=True)
                 for item in compiled.investigations
             ],
-            "timeline": [
+            "events": [
                 {
                     "id": item.id,
                     "at_minute": item.at_minute,
@@ -474,7 +517,7 @@ class ScenarioCompiler:
                         item.model_dump(mode="json", exclude_none=True)
                         for item in variant.observation_overrides
                     ],
-                    "timeline_overrides": [
+                    "event_overrides": [
                         item.model_dump(mode="json", exclude_none=True)
                         for item in variant.timeline_overrides
                     ],
@@ -601,6 +644,21 @@ class ScenarioCompiler:
             if not isinstance(value, dict):
                 raise TypeError(f"{filename} entry {item_id} must be a mapping")
         return values
+
+    @staticmethod
+    def _serialize_role_reference(
+        item: RoleDefinition, catalog: dict[str, RoleDefinition]
+    ) -> str:
+        catalog_item = catalog.get(item.id)
+        if catalog_item is None:
+            raise ScenarioValidationError(
+                f"role {item.id} is not defined in the shared roles catalog"
+            )
+        if item.model_dump(mode="json") != catalog_item.model_dump(mode="json"):
+            raise ScenarioValidationError(
+                f"role {item.id} differs from the shared roles catalog"
+            )
+        return item.id
 
     @staticmethod
     def _serialize_catalog_item(item, catalog):

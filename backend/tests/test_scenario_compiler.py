@@ -74,10 +74,13 @@ def test_v2_serialization_round_trips_without_domain_changes():
     definition = scenario_compiler.serialize_definition(original, SCENARIO)
     variants = scenario_compiler.serialize_variants(original)
 
-    assert definition["participants"]["roles"][:4] == [
-        "soc", "ciso", "dpo", "ceo"
+    assert definition["participants"]["roles"] == [
+        "soc", "ciso", "dpo", "ceo", "role_5"
     ]
-    assert isinstance(definition["participants"]["roles"][4], dict)
+    assert "events" in definition
+    assert "timeline" not in definition
+    assert "event_overrides" in variants["variants"][0]
+    assert "timeline_overrides" not in variants["variants"][0]
     assert definition["participants"]["external_entities"] == [
         "slovenian_dpa", "police", "press"
     ]
@@ -124,6 +127,22 @@ def test_rejects_unknown_catalog_reference(tmp_path: Path):
     dump(path, document)
 
     with pytest.raises(ScenarioValidationError, match="unknown role catalog reference"):
+        compiler(catalogs).compile(scenario)
+
+
+def test_rejects_inline_or_overridden_participant_roles(tmp_path: Path):
+    scenario, catalogs = copy_content(tmp_path)
+    path = scenario / "definition.yaml"
+    document = load(path)
+    document["participants"]["roles"][0] = {
+        "ref": "soc",
+        "overrides": {"communication_style": {"tone": "calm"}},
+    }
+    dump(path, document)
+
+    with pytest.raises(
+        ScenarioValidationError, match="only role catalog IDs"
+    ):
         compiler(catalogs).compile(scenario)
 
 
@@ -179,7 +198,7 @@ def test_rejects_unknown_timeline_role(tmp_path: Path):
     scenario, catalogs = copy_content(tmp_path)
     path = scenario / "definition.yaml"
     document = load(path)
-    document["timeline"][0]["role"] = "ghost"
+    document["events"][0]["role"] = "ghost"
     dump(path, document)
 
     with pytest.raises(ScenarioValidationError, match="unknown role ghost"):

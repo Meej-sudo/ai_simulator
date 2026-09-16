@@ -7,7 +7,11 @@ from threading import RLock
 import yaml
 
 from app.domain.scenarios.compiler import ScenarioCompiler, ScenarioValidationError
-from app.domain.scenarios.models import CompiledScenario, RuntimeScenario
+from app.domain.scenarios.models import (
+    CompiledScenario,
+    RoleDefinition,
+    RuntimeScenario,
+)
 
 
 class ScenarioRegistry:
@@ -100,16 +104,100 @@ class ScenarioRegistry:
     def update_document(
         self, scenario_id: str, document: CompiledScenario
     ) -> CompiledScenario:
-        directory = self._directory(scenario_id)
-        files = {
-            "definition.yaml": self._dump_yaml(
-                self.compiler.serialize_definition(document, directory)
-            ),
-            "variants.yaml": self._dump_yaml(
-                self.compiler.serialize_variants(document)
-            ),
-        }
-        return self.update_source_files(scenario_id, files)
+        with self._lock:
+            directory = self._directory(scenario_id)
+            roles_path = self.catalog_root / "roles.yaml"
+            entities_path = self.catalog_root / "external_entities.yaml"
+            role_catalog_document = yaml.safe_load(
+                roles_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(role_catalog_document, dict) or not isinstance(
+                role_catalog_document.get("roles"), dict
+            ):
+                raise ScenarioValidationError(
+                    "roles.yaml roles must be a mapping"
+                )
+
+            catalog_values = role_catalog_document["roles"]
+            for role in document.roles:
+                catalog_values[role.id] = role.model_dump(
+                    mode="json", exclude={"id"}, exclude_none=True
+                )
+            role_catalog = {
+                role_id: RoleDefinition.model_validate(
+                    {"id": role_id, **value}
+                )
+                for role_id, value in catalog_values.items()
+            }
+            role_catalog_content = self._dump_yaml(role_catalog_document)
+            files = {
+                "definition.yaml": self._dump_yaml(
+                    self.compiler.serialize_definition(
+                        document, directory, role_catalog=role_catalog
+                    )
+                ),
+                "variants.yaml": self._dump_yaml(
+                    self.compiler.serialize_variants(document)
+                ),
+            }
+
+            for name, content in {
+                "roles.yaml": role_catalog_content,
+                **files,
+            }.items():
+                if len(content.encode("utf-8")) > self.MAX_SOURCE_BYTES:
+                    raise ScenarioValidationError(
+                        f"{name} exceeds the {self.MAX_SOURCE_BYTES}-byte limit"
+                    )
+
+            with TemporaryDirectory(prefix="scenario-form-editor-") as staging_name:
+                staging_root = Path(staging_name)
+                staging_catalogs = staging_root / "catalogs"
+                staging_scenario = staging_root / "scenarios" / scenario_id
+                staging_catalogs.mkdir(parents=True)
+                staging_scenario.mkdir(parents=True)
+                (staging_catalogs / "roles.yaml").write_text(
+                    role_catalog_content, encoding="utf-8"
+                )
+                (staging_catalogs / "external_entities.yaml").write_text(
+                    entities_path.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+                for name, content in files.items():
+                    (staging_scenario / name).write_text(
+                        content, encoding="utf-8"
+                    )
+                staged_compiler = ScenarioCompiler(staging_catalogs)
+                compiled = staged_compiler.compile(staging_scenario)
+                if compiled.scenario.id != scenario_id:
+                    raise ScenarioValidationError(
+                        f"definition.yaml scenario.id must remain {scenario_id}; "
+                        f"received {compiled.scenario.id}"
+                    )
+
+            targets = {
+                roles_path: role_catalog_content,
+                **{directory / name: content for name, content in files.items()},
+            }
+            originals = {
+                path: path.read_text(encoding="utf-8")
+                if path.is_file()
+                else None
+                for path in targets
+            }
+            try:
+                for path, content in targets.items():
+                    self._atomic_write(path, content)
+                self.load()
+            except Exception:
+                for path, content in originals.items():
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        self._atomic_write(path, content)
+                self.load()
+                raise
+            return self.get(scenario_id)
 
     def update_source_files(
         self, scenario_id: str, files: dict[str, str]

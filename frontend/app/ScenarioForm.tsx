@@ -308,7 +308,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
     { id: "evidence", label: "Evidence", count: evidence.length },
     { id: "hypotheses", label: "Hypotheses", count: hypotheses.length },
     { id: "investigations", label: "Investigations", count: document.investigations.length },
-    { id: "timeline", label: "Timeline", count: document.timeline.length },
+    { id: "timeline", label: "Events", count: document.timeline.length },
     { id: "variants", label: "Variants", count: document.variants.length },
     { id: "scoring", label: "Scoring", count: document.scoring_rules.length },
   ];
@@ -483,8 +483,8 @@ export default function ScenarioForm({ document, onChange }: Props) {
       {section === "roles" && (
         <section className="form-section">
           <Heading
-            title="Simulation roles"
-            description="Role responsibilities, communication style, and personality constrain role chat."
+            title="Participant roles"
+            description="Roles are stored in the shared catalog. Edits affect every scenario that references a role; removing one here only removes it from this scenario."
             addLabel="Add role"
             onAdd={() => onChange({
               ...document,
@@ -694,7 +694,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
         <section className="form-section">
           <Heading
             title="Observations"
-            description="Ambiguous signals granted by the timeline. They should not state the hidden answer."
+            description="Ambiguous signals granted by scenario events. They should not state the hidden answer."
             addLabel="Add observation"
             onAdd={() => onChange({
               ...document,
@@ -1005,7 +1005,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
       {section === "timeline" && (
         <section className="form-section">
           <Heading
-            title="Observation timeline"
+            title="Observation events"
             description="Schedule when a role receives one or more ambiguous observations."
             addLabel="Add event"
             onAdd={() => {

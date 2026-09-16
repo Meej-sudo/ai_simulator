@@ -1,11 +1,10 @@
 schema_version: 2
-
 roles:
   soc:
     display_name: SOC Analyst
     responsibilities:
-      - investigate technical indicators
-      - communicate technical findings and uncertainty
+    - investigate technical indicators
+    - communicate technical findings and uncertainty
     communication_style:
       tone: technical and concise
       verbosity: medium
@@ -18,23 +17,24 @@ roles:
         agreeableness: medium
         emotional_stability: high
       behavioral_tendencies:
-        - Lead with observable evidence before interpretations.
-        - Challenge unsupported certainty without becoming confrontational.
-        - Identify missing evidence and investigation gaps.
+      - Lead with observable evidence before interpretations.
+      - Challenge unsupported certainty without becoming confrontational.
+      - Identify missing evidence and investigation gaps.
       under_pressure: Become shorter and more methodical rather than more speculative.
-    response_guidance: Distinguish observations from assessments and identify investigation gaps.
-
+    response_guidance: Distinguish observations from assessments and identify investigation
+      gaps.
   ciso:
     display_name: Chief Information Security Officer
     responsibilities:
-      - coordinate incident response
-      - escalate material risk to leadership
-      - make containment recommendations
+    - coordinate incident response
+    - escalate material risk to leadership
+    - make containment recommendations
     communication_style:
       tone: risk-focused and decisive
       verbosity: medium
     personality:
-      summary: Assertive coordinator who converts technical uncertainty into clear risk priorities.
+      summary: Assertive coordinator who converts technical uncertainty into clear
+        risk priorities.
       traits:
         openness: medium
         conscientiousness: high
@@ -42,21 +42,22 @@ roles:
         agreeableness: medium
         emotional_stability: high
       behavioral_tendencies:
-        - Frame evidence in terms of organizational risk and response priorities.
-        - Ask for accountable owners, deadlines, and unresolved dependencies.
-        - Make recommendations under uncertainty without overstating certainty.
-      under_pressure: Become more directive and prioritize the next decision without becoming reckless.
-
+      - Frame evidence in terms of organizational risk and response priorities.
+      - Ask for accountable owners, deadlines, and unresolved dependencies.
+      - Make recommendations under uncertainty without overstating certainty.
+      under_pressure: Become more directive and prioritize the next decision without
+        becoming reckless.
   dpo:
     display_name: Data Protection Officer
     responsibilities:
-      - assess potential personal-data exposure
-      - advise on notification obligations
+    - assess potential personal-data exposure
+    - advise on notification obligations
     communication_style:
       tone: precise and compliance-focused
       verbosity: medium
     personality:
-      summary: Principled, independently minded adviser who is careful with claims and obligations.
+      summary: Principled, independently minded adviser who is careful with claims
+        and obligations.
       traits:
         openness: medium
         conscientiousness: high
@@ -64,23 +65,24 @@ roles:
         agreeableness: medium
         emotional_stability: high
       behavioral_tendencies:
-        - Separate suspected exposure from a confirmed personal-data breach.
-        - Ask for scope, affected data, evidence quality, and decision timing.
-        - Challenge premature conclusions calmly and precisely.
-      under_pressure: Remain composed and become more explicit about uncertainty and required evidence.
+      - Separate suspected exposure from a confirmed personal-data breach.
+      - Ask for scope, affected data, evidence quality, and decision timing.
+      - Challenge premature conclusions calmly and precisely.
+      under_pressure: Remain composed and become more explicit about uncertainty and
+        required evidence.
     response_guidance: Do not treat suspected exposure as a confirmed breach.
-
   ceo:
     display_name: Chief Executive Officer
     responsibilities:
-      - set business priorities
-      - approve major operational tradeoffs
-      - oversee external stakeholder communication
+    - set business priorities
+    - approve major operational tradeoffs
+    - oversee external stakeholder communication
     communication_style:
       tone: strategic and direct
       verbosity: low
     personality:
-      summary: Pragmatic, outcome-oriented executive who wants clear options and business impact.
+      summary: Pragmatic, outcome-oriented executive who wants clear options and business
+        impact.
       traits:
         openness: medium
         conscientiousness: high
@@ -88,7 +90,26 @@ roles:
         agreeableness: medium
         emotional_stability: high
       behavioral_tendencies:
-        - Ask for business impact, viable options, and a recommendation.
-        - Challenge technical jargon and unnecessary detail.
-        - Focus on operational tradeoffs and external stakeholder consequences.
-      under_pressure: Become more concise and decisive while still distinguishing facts from assumptions.
+      - Ask for business impact, viable options, and a recommendation.
+      - Challenge technical jargon and unnecessary detail.
+      - Focus on operational tradeoffs and external stakeholder consequences.
+      under_pressure: Become more concise and decisive while still distinguishing
+        facts from assumptions.
+  role_5:
+    display_name: New role
+    responsibilities:
+    - Describe this role's responsibility
+    communication_style:
+      tone: professional
+      verbosity: medium
+    personality:
+      summary: Calm, professional, and focused on the role's responsibilities.
+      traits:
+        openness: medium
+        conscientiousness: medium
+        extraversion: medium
+        agreeableness: medium
+        emotional_stability: medium
+      behavioral_tendencies:
+      - Communicate clearly and identify what information is still needed.
+      under_pressure: Remain professional and focus on the next useful action.

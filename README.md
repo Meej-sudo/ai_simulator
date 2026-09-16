@@ -18,7 +18,7 @@ grades an assessment, or receives variant ground truth.
 ## Sprint 1 capabilities
 
 - First-class observations, findings, hypotheses, and investigations
-- Ambiguous timeline observations that do not reveal the scenario answer
+- Ambiguous event observations that do not reveal the scenario answer
 - Free-text investigation requests with provider-neutral LLM interpretation
 - Deterministic, variant-specific investigation outcomes
 - Investigation prerequisites, durations, non-repeatability, and exact-time
@@ -41,10 +41,10 @@ grades an assessment, or receives variant ground truth.
 
 ## Core concepts
 
-- **Observation**: an ambiguous signal delivered by the scenario timeline, such
+- **Observation**: an ambiguous signal delivered by scenario events, such
   as an unusual outbound byte count.
 - **Finding**: evidence produced by a completed investigation. Findings are not
-  placed on the timeline.
+  scheduled as events.
 - **Hypothesis**: a public proposition the trainee may assess, such as data
   exfiltration or a legitimate backup transfer.
 - **Investigation**: a public, author-defined kind of evidence-gathering work
@@ -122,7 +122,7 @@ FastAPI backend ---------------------------------> OpenAI or Ollama
   |                                                  role prompt, current role facts,
   |                                                  and the trainee's question only
   +----> in-memory scenario registry
-  |      roles, facts, timelines, variants,
+  |      roles, facts, events, variants,
   |      hidden ground truth, and scoring rules
   |
   +----> PostgreSQL
@@ -139,7 +139,7 @@ The normal exercise flow is:
 
 1. The frontend lists public scenario metadata, variants, decision categories,
    and role descriptions, then creates and starts a session.
-2. Advancing the logical clock fires due timeline events. Each grant produces a
+2. Advancing the logical clock fires due events. Each grant produces a
    `FACT_LEARNED` event for one role.
 3. Current knowledge is reconstructed by replaying that role's `FACT_LEARNED`
    events through the current simulation time. Facts are therefore not globally
@@ -149,7 +149,7 @@ The normal exercise flow is:
    it to the receiving role with another `FACT_LEARNED` event.
 5. Asking a role causes the backend to assemble an LLM request from that role's
    identity, guidance, current facts, confidence levels, the current time, and
-   the trainee's question. Other roles' facts, future timeline grants, scoring
+   the trainee's question. Other roles' facts, future event grants, scoring
    rules, and variant ground truth are not added to the request.
 6. The LLM must return a structured response. The backend rejects references to
    fact IDs outside the allowed set and rejects permitted internal fact IDs when
@@ -164,12 +164,12 @@ The normal exercise flow is:
 
 For the included ransomware scenario, the authored visibility schedule is:
 
-| Simulated role | Facts learned directly from the timeline |
+| Simulated role | Facts learned directly from scheduled events |
 | --- | --- |
 | SOC analyst | Ransomware activity at T+5, failed admin logins at T+10, suspected account compromise at T+25, and the exfiltration assessment and outbound-traffic observation at T+45. Track Alpha adds confirmed exfiltration at T+80. Track Bravo instead identifies the traffic as approved backup activity at T+55. |
 | CISO | Suspected account compromise and ransomware activity at T+40. |
-| DPO | No direct timeline grants; learns facts only when another role explicitly shares them. |
-| CEO | No direct timeline grants; learns facts only when another role explicitly shares them. |
+| DPO | No direct event grants; learns facts only when another role explicitly shares them. |
+| CEO | No direct event grants; learns facts only when another role explicitly shares them. |
 
 The schedule controls a persona's derived knowledge and LLM context. It does not
 prevent the facilitator UI from retrieving each persona's knowledge, as described
@@ -180,8 +180,8 @@ below.
 | Information or action | Current restriction |
 | --- | --- |
 | Variant ground truth | Remains in the backend's scenario object and is excluded from public response models and LLM requests. It is still visible to operators who can read the scenario files, container, or host filesystem. |
-| Future facts | Do not enter role knowledge until their timeline event fires. They are not sent to the LLM, although an operator with filesystem access can read the authored scenario. |
-| Another role's unshared facts | Excluded when generating a response for the target role. A fact enters another role's knowledge only through an explicit share or a timeline grant. |
+| Future facts | Do not enter role knowledge until their scheduled event fires. They are not sent to the LLM, although an operator with filesystem access can read the authored scenario. |
+| Another role's unshared facts | Excluded when generating a response for the target role. A fact enters another role's knowledge only through an explicit share or an event grant. |
 | Fact sharing | The backend verifies that the declared sending role knows the fact and that both role and fact IDs exist. |
 | LLM output | Must match the structured response schema. Referenced fact IDs are checked against the role's allowed set; violations cause one retry and then a safe fallback. |
 | Evaluation | The endpoint returns a conflict response until the session is completed. The UI also withholds the score during an active exercise. |
@@ -447,7 +447,7 @@ uses forms rather than raw YAML. Sprint 1 sections cover:
 - observations and findings
 - public hypotheses
 - investigations, matching phrases, performers, prerequisites, and duration
-- observation timeline grants
+- observation event grants
 - hidden ground truth and per-variant investigation outcomes
 - migrated scoring rules
 
@@ -464,31 +464,27 @@ content/
     external_entities.yaml     reusable external recipients
   scenarios/
     <scenario_id>/
-      definition.yaml          scenario, participants, evidence, timeline, and scoring
+      definition.yaml          scenario, participants, evidence, events, and scoring
       variants.yaml            hidden truth, overrides, and investigation outcomes
 ```
 
-A participant can be a catalog ID, an inline definition, or a catalog reference
-with scenario-local overrides. For example:
+Participant roles are exclusively catalog references. Role definitions are stored
+once in `content/catalogs/roles.yaml`, and scenarios contain only their IDs:
 
 ```yaml
 participants:
   roles:
     - soc
-    - ref: dpo
-      overrides:
-        communication_style:
-          tone: calm and precise
-    - id: exercise_observer
-      display_name: Exercise Observer
-      responsibilities: [observe the exercise]
-      communication_style: {tone: neutral, verbosity: low}
+    - dpo
+    - exercise_observer
 ```
 
-The form editor always presents resolved values. Saving an edited shared participant
-creates a scenario-local `overrides` block; it never silently changes the shared
-catalog for other scenarios. Raw source editing accepts exactly `definition.yaml`
-and `variants.yaml`.
+The form editor presents the resolved role definitions. Adding or editing a role
+updates the shared catalog, so the change applies to every scenario that references
+that ID. Removing a role in the scenario editor removes only its participation and
+does not delete the catalog entry. Scenario and catalog changes are validated and
+published together with rollback on failure. Raw source editing accepts exactly
+`definition.yaml` and `variants.yaml`.
 
 The compiler rejects, among other problems:
 
@@ -496,11 +492,11 @@ The compiler rejects, among other problems:
 - malformed or duplicate stable IDs
 - observation/finding ID collisions
 - unknown role, evidence, hypothesis, event, or investigation references
-- invalid timeline events or events beyond scenario duration
+- invalid events or events beyond scenario duration
 - missing or duplicate per-variant investigation outcomes
 - outcomes that reference anything other than findings
 - malformed type-specific scoring rules
-- invalid merged variant overrides
+- invalid merged event or observation overrides
 
 The included ransomware scenario intentionally presents the same ambiguous
 observations in both tracks. Investigation results, not initial observations,

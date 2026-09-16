@@ -10,7 +10,7 @@ variants:
     legitimate_backup_transfer: false
     outbound_traffic_cause: attacker_transfer
   observation_overrides: []
-  timeline_overrides: []
+  event_overrides: []
   investigation_outcomes:
     I001:
       reveal_findings:
@@ -43,7 +43,7 @@ variants:
     legitimate_backup_transfer: true
     outbound_traffic_cause: approved_backup
   observation_overrides: []
-  timeline_overrides: []
+  event_overrides: []
   investigation_outcomes:
     I001:
       reveal_findings:
