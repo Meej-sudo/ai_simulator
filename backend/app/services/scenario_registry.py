@@ -15,27 +15,44 @@ class ScenarioRegistry:
 
     def __init__(self, root: str | Path, compiler: ScenarioCompiler | None = None):
         self.root = Path(root)
-        self.compiler = compiler or ScenarioCompiler()
+        self.catalog_root = self.root.parent / "catalogs"
+        self.compiler = compiler or ScenarioCompiler(self.catalog_root)
         self._scenarios: dict[str, CompiledScenario] = {}
         self._directories: dict[str, Path] = {}
+        self._versions: dict[tuple[str, str], CompiledScenario] = {}
         self._lock = RLock()
 
     def load(self) -> None:
         with self._lock:
             scenarios: dict[str, CompiledScenario] = {}
             directories: dict[str, Path] = {}
+            versions = dict(self._versions)
             if not self.root.is_dir():
-                raise ScenarioValidationError(f"scenario root does not exist: {self.root}")
+                raise ScenarioValidationError(
+                    f"scenario root does not exist: {self.root}"
+                )
             for directory in sorted(self.root.iterdir()):
-                if directory.is_dir() and (directory / "scenario.yaml").is_file():
-                    compiled = self.compiler.compile(directory)
-                    scenario_id = compiled.scenario.id
-                    if scenario_id in scenarios:
-                        raise ScenarioValidationError(f"duplicate scenario ID: {scenario_id}")
-                    scenarios[scenario_id] = compiled
-                    directories[scenario_id] = directory
+                if not directory.is_dir():
+                    continue
+                if not (
+                    (directory / "definition.yaml").is_file()
+                    or (directory / "scenario.yaml").is_file()
+                ):
+                    continue
+                compiled = self.compiler.compile(directory)
+                scenario_id = compiled.scenario.id
+                if scenario_id in scenarios:
+                    raise ScenarioValidationError(
+                        f"duplicate scenario ID: {scenario_id}"
+                    )
+                scenarios[scenario_id] = compiled
+                directories[scenario_id] = directory
+                versions[
+                    (scenario_id, self.compiler.content_version(compiled))
+                ] = compiled
             self._scenarios = scenarios
             self._directories = directories
+            self._versions = versions
 
     def all(self) -> list[CompiledScenario]:
         return list(self._scenarios.values())
@@ -46,91 +63,50 @@ class ScenarioRegistry:
         except KeyError as exc:
             raise KeyError(f"scenario not found: {scenario_id}") from exc
 
-    def materialize(self, scenario_id: str, variant_id: str) -> RuntimeScenario:
-        return self.compiler.materialize(self.get(scenario_id), variant_id)
+    def version(self, scenario_id: str) -> str:
+        return self.compiler.content_version(self.get(scenario_id))
+
+    def get_version(
+        self, scenario_id: str, scenario_version: str
+    ) -> CompiledScenario:
+        try:
+            return self._versions[(scenario_id, scenario_version)]
+        except KeyError as exc:
+            raise KeyError(
+                f"scenario version not found: {scenario_id}@{scenario_version}"
+            ) from exc
+
+    def materialize(
+        self,
+        scenario_id: str,
+        variant_id: str,
+        scenario_version: str | None = None,
+    ) -> RuntimeScenario:
+        compiled = (
+            self.get_version(scenario_id, scenario_version)
+            if scenario_version
+            else self.get(scenario_id)
+        )
+        return self.compiler.materialize(compiled, variant_id)
 
     def source_files(self, scenario_id: str) -> dict[str, str]:
         with self._lock:
             directory = self._directory(scenario_id)
             return {
                 name: (directory / name).read_text(encoding="utf-8")
-                for name in self.compiler.REQUIRED_FILES
+                for name in self.compiler.required_files_for(directory)
             }
 
     def update_document(
         self, scenario_id: str, document: CompiledScenario
     ) -> CompiledScenario:
+        directory = self._directory(scenario_id)
         files = {
-            "scenario.yaml": self._dump_yaml(
-                {"scenario": document.scenario.model_dump(mode="json", exclude_none=True)}
-            ),
-            "roles.yaml": self._dump_yaml(
-                {
-                    "roles": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.roles
-                    ]
-                }
-            ),
-            "external_entities.yaml": self._dump_yaml(
-                {
-                    "external_entities": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.external_entities
-                    ]
-                }
-            ),
-            "evidence.yaml": self._dump_yaml(
-                {
-                    "observations": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.observations
-                    ],
-                    "findings": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.findings
-                    ],
-                }
-            ),
-            "hypotheses.yaml": self._dump_yaml(
-                {
-                    "hypotheses": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.hypotheses
-                    ]
-                }
-            ),
-            "investigations.yaml": self._dump_yaml(
-                {
-                    "investigations": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.investigations
-                    ]
-                }
-            ),
-            "timeline.yaml": self._dump_yaml(
-                {
-                    "events": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.timeline
-                    ]
-                }
+            "definition.yaml": self._dump_yaml(
+                self.compiler.serialize_definition(document, directory)
             ),
             "variants.yaml": self._dump_yaml(
-                {
-                    "variants": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.variants
-                    ]
-                }
-            ),
-            "scoring.yaml": self._dump_yaml(
-                {
-                    "rules": [
-                        item.model_dump(mode="json", exclude_none=True)
-                        for item in document.scoring_rules
-                    ]
-                }
+                self.compiler.serialize_variants(document)
             ),
         }
         return self.update_source_files(scenario_id, files)
@@ -140,7 +116,7 @@ class ScenarioRegistry:
     ) -> CompiledScenario:
         with self._lock:
             directory = self._directory(scenario_id)
-            required = set(self.compiler.REQUIRED_FILES)
+            required = set(self.compiler.required_files_for(directory))
             supplied = set(files)
             if supplied != required:
                 missing = sorted(required - supplied)
@@ -162,24 +138,46 @@ class ScenarioRegistry:
 
             with TemporaryDirectory(prefix="scenario-editor-") as staging_name:
                 staging = Path(staging_name)
-                for name in self.compiler.REQUIRED_FILES:
+                for name in required:
                     (staging / name).write_text(files[name], encoding="utf-8")
+
+                # Reject an attempted rename before compiling cross-file
+                # references so the authoring API reports the protected field.
+                if "definition.yaml" in files:
+                    try:
+                        definition = yaml.safe_load(files["definition.yaml"])
+                        submitted_id = definition["scenario"]["id"]
+                    except (KeyError, TypeError, yaml.YAMLError):
+                        submitted_id = None
+                    if submitted_id is not None and submitted_id != scenario_id:
+                        raise ScenarioValidationError(
+                            "definition.yaml scenario.id must remain "
+                            f"{scenario_id}; received {submitted_id}"
+                        )
                 compiled = self.compiler.compile(staging)
 
             if compiled.scenario.id != scenario_id:
                 raise ScenarioValidationError(
-                    f"scenario.yaml id must remain {scenario_id}; "
+                    f"definition.yaml scenario.id must remain {scenario_id}; "
                     f"received {compiled.scenario.id}"
                 )
 
-            originals = self.source_files(scenario_id)
+            originals = {
+                name: (directory / name).read_text(encoding="utf-8")
+                for name in required
+                if (directory / name).is_file()
+            }
             try:
-                for name in self.compiler.REQUIRED_FILES:
+                for name in required:
                     self._atomic_write(directory / name, files[name])
                 self.load()
             except Exception:
-                for name, content in originals.items():
-                    self._atomic_write(directory / name, content)
+                for name in required:
+                    path = directory / name
+                    if name in originals:
+                        self._atomic_write(path, originals[name])
+                    elif path.exists():
+                        path.unlink()
                 self.load()
                 raise
             return self.get(scenario_id)
@@ -197,7 +195,8 @@ class ScenarioRegistry:
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         temporary_name: str | None = None
-        original = path.stat()
+        original = path.stat() if path.exists() else None
+        parent = path.parent.stat()
         try:
             with NamedTemporaryFile(
                 mode="w",
@@ -211,8 +210,15 @@ class ScenarioRegistry:
                 temporary.flush()
                 os.fsync(temporary.fileno())
                 temporary_name = temporary.name
-            os.chown(temporary_name, original.st_uid, original.st_gid)
-            os.chmod(temporary_name, S_IMODE(original.st_mode))
+            os.chown(
+                temporary_name,
+                original.st_uid if original else parent.st_uid,
+                original.st_gid if original else parent.st_gid,
+            )
+            os.chmod(
+                temporary_name,
+                S_IMODE(original.st_mode) if original else 0o644,
+            )
             os.replace(temporary_name, path)
         finally:
             if temporary_name:

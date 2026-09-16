@@ -31,7 +31,10 @@ grades an assessment, or receives variant ground truth.
 - Public event payload redaction for role-scoped evidence
 - Minimal process scoring migrated to evidence and assessment events
 - A form-based scenario editor for all Sprint 1 concepts
-- Strict Pydantic validation and cross-reference checks across nine YAML files
+- Versioned two-file scenario packages, shared participant catalogs, and strict
+  Pydantic/cross-reference validation
+- Immutable compiled scenario snapshots pin every new session to the content it
+  started with
 - Deterministic fake, OpenAI, and Ollama LLM adapters
 - External entities retained as an existing extension for authorities, police,
   media, and other communication recipients
@@ -99,9 +102,9 @@ The OpenAI adapter uses structured output through `responses.parse` with
 `store=False`. Ollama uses native `/api/chat` with the same JSON schemas.
 The fake provider is deterministic and is used by default and in tests.
 
-Variant `ground_truth` and `investigation_outcomes` are excluded from runtime
-serialization and are absent from every LLM request model. Public event listing
-also redacts observation, finding, and evidence-share payloads. A role obtains
+Variant `ground_truth` and `investigation_outcomes` are excluded from public
+runtime serialization and are absent from every LLM request model. Public event
+listing also redacts observation, finding, and evidence-share payloads. A role obtains
 evidence through its role-scoped knowledge endpoint.
 
 ## System operation and information access
@@ -266,7 +269,9 @@ Open:
 
 The browser calls the frontend's same-origin `/api` path. Next.js proxies those
 requests to the backend service, so the browser does not call port 8000 directly
-and does not depend on cross-origin access.
+and does not depend on cross-origin access. The backend container applies Alembic
+database migrations before starting the API. It safely adopts databases created by
+the original pre-Alembic container before applying newer revisions.
 
 For Ollama, copy `.env.example` to `.env` and set the URL of the Ollama server:
 
@@ -450,19 +455,40 @@ The complete document is staged and compiled before any live file is changed.
 A failed validation leaves both files and the loaded registry unchanged.
 Successful writes preserve existing ownership and permissions.
 
-Each scenario directory has nine canonical files:
+Scenario content uses schema version 2 and this layout:
 
 ```text
-scenario.yaml            metadata, duration, and decision categories
-roles.yaml               role responsibilities, personality, and communication style
-external_entities.yaml   external recipients and accepted communication types
-evidence.yaml            observation and finding definitions
-hypotheses.yaml          public propositions available for assessments
-investigations.yaml      public definitions, routing hints, prerequisites, duration
-timeline.yaml            deterministic observation grants
-variants.yaml            hidden truth, overrides, and investigation outcomes
-scoring.yaml             deterministic process and assessment timing rules
+content/
+  catalogs/
+    roles.yaml                 reusable internal roles (responsibilities, personality, style)
+    external_entities.yaml     reusable external recipients
+  scenarios/
+    <scenario_id>/
+      definition.yaml          scenario, participants, evidence, timeline, and scoring
+      variants.yaml            hidden truth, overrides, and investigation outcomes
 ```
+
+A participant can be a catalog ID, an inline definition, or a catalog reference
+with scenario-local overrides. For example:
+
+```yaml
+participants:
+  roles:
+    - soc
+    - ref: dpo
+      overrides:
+        communication_style:
+          tone: calm and precise
+    - id: exercise_observer
+      display_name: Exercise Observer
+      responsibilities: [observe the exercise]
+      communication_style: {tone: neutral, verbosity: low}
+```
+
+The form editor always presents resolved values. Saving an edited shared participant
+creates a scenario-local `overrides` block; it never silently changes the shared
+catalog for other scenarios. Raw source editing accepts exactly `definition.yaml`
+and `variants.yaml`.
 
 The compiler rejects, among other problems:
 
@@ -495,7 +521,7 @@ Run locally with SQLite:
 ```bash
 cd backend
 DATABASE_URL=sqlite+pysqlite:///./trainer.sqlite3 \
-SCENARIOS_PATH=../scenarios \
+SCENARIOS_PATH=../content/scenarios \
 ../.venv/bin/uvicorn app.main:app --reload
 ```
 
@@ -507,8 +533,21 @@ DATABASE_URL=postgresql+psycopg://trainer:trainer@localhost:5432/trainer \
 ../.venv/bin/alembic upgrade head
 ```
 
-Sprint 1 uses the existing append-only event table, so it does not require a new
-database migration.
+Schema version 2 adds immutable scenario data to session records. Docker applies
+the migration automatically; local deployments must run `alembic upgrade head`
+before starting the updated API. New sessions retain their compiled scenario and
+variant snapshot even if authors edit the source files later.
+
+Legacy nine-file bundles remain readable so deployments can migrate gradually. To
+convert them without modifying or deleting the original files, run:
+
+```bash
+PYTHONPATH=backend .venv/bin/python backend/scripts/migrate_scenarios_v2.py \
+  path/to/legacy-scenarios content/scenarios --catalogs content/catalogs
+```
+
+The command refuses to overwrite an existing destination and verifies that the
+compiled legacy and v2 representations are identical before publishing each bundle.
 
 Each role personality combines a compact Big Five trait profile with concrete
 behavioral tendencies and an under-pressure response. Personality affects how a
@@ -538,8 +577,9 @@ contracts, API redaction, and end-to-end discovery.
 - Investigation routing and assessment normalization depend on model quality.
   Validation prevents unauthorized IDs, but a poorly matched eligible request
   can still require clearer trainee wording.
-- Scenario definitions are filesystem-backed. Editing a scenario while sessions
-  are active can change how those sessions materialize on their next command.
+- Scenario definitions are filesystem-backed. New sessions are pinned to an
+  immutable snapshot; sessions created before this migration use the legacy
+  current-content fallback until they are replaced.
 - External entities are authored and listed but outbound communication actions
   are not part of this sprint.
 - The compatibility `share-fact` route is temporary and should be removed after

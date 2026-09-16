@@ -1,0 +1,312 @@
+schema_version: 2
+scenario:
+  id: ransomware_001
+  name: Ransomware with suspected data exfiltration
+  description: Coordinate investigation, escalation, privacy response, and executive
+    decisions under uncertainty.
+  duration_minutes: 180
+participants:
+  roles:
+  - soc
+  - ciso
+  - dpo
+  - ceo
+  - id: role_5
+    display_name: New role
+    responsibilities:
+    - Describe this role's responsibility
+    communication_style:
+      tone: professional
+      verbosity: medium
+    personality:
+      summary: Calm, professional, and focused on the role's responsibilities.
+      traits:
+        openness: medium
+        conscientiousness: medium
+        extraversion: medium
+        agreeableness: medium
+        emotional_stability: medium
+      behavioral_tendencies:
+      - Communicate clearly and identify what information is still needed.
+      under_pressure: Remain professional and focus on the next useful action.
+  external_entities:
+  - slovenian_dpa
+  - police
+  - press
+decision_categories:
+- id: containment
+  display_name: Containment
+  description: Decisions that limit spread or isolate affected systems.
+  captures_confidence: false
+- id: exfiltration
+  display_name: Exfiltration
+  description: Decisions and conclusions about possible data loss.
+  captures_confidence: true
+- id: notification
+  display_name: Notification
+  description: Decisions about internal, regulatory, or external notification.
+  captures_confidence: false
+hypotheses:
+- id: H001
+  key: credential_compromise
+  label: Credential compromise
+- id: H002
+  key: data_exfiltration
+  label: Data exfiltration
+- id: H003
+  key: legitimate_backup_transfer
+  label: Legitimate backup transfer
+- id: H004
+  key: ransomware_intrusion
+  label: Ransomware intrusion
+evidence:
+  observations:
+  - id: O001
+    source: endpoint_monitoring
+    statement: Ransomware encryption activity was detected on multiple file servers.
+    reliability: confirmed
+  - id: O002
+    source: identity_monitoring
+    statement: Multiple failed authentications were followed by a successful login
+      for svc_backup.
+    reliability: high
+  - id: O003
+    source: identity_monitoring
+    statement: svc_backup authenticated from a source not seen in its recent sign-in
+      history.
+    reliability: high
+  - id: O004
+    source: network_monitoring
+    statement: FILESERVER-03 generated approximately 18 GB of outbound traffic during
+      a nine-minute period.
+    reliability: high
+  - id: O005
+    source: asset_inventory
+    statement: FILESERVER-03 contains directories used for customer-data exports.
+    reliability: confirmed
+  findings:
+  - id: FD001
+    statement: The svc_backup login originated from an unmanaged internet address
+      rather than the internal backup server.
+    reliability: high
+  - id: FD002
+    statement: During the previous 90 days, svc_backup authenticated only from the
+      internal backup server.
+    reliability: high
+  - id: FD003
+    statement: Shortly after login, svc_backup enumerated shared directories on FILESERVER-03.
+    reliability: high
+  - id: FD004
+    statement: The outbound destination is not associated with any approved organizational
+      service.
+    reliability: high
+  - id: FD005
+    statement: Customer-export directories were accessed by svc_backup shortly before
+      the outbound transfer.
+    reliability: high
+  - id: FD006
+    statement: No approved backup job was scheduled for FILESERVER-03 during the transfer
+      window.
+    reliability: high
+  - id: FD008
+    statement: A compressed archive containing customer records was created shortly
+      before the outbound transfer.
+    reliability: high
+  - id: FD009
+    statement: Network-flow byte counts closely match the size of the customer-record
+      archive.
+    reliability: high
+  - id: FD010
+    statement: The outbound destination belongs to the organizations approved backup
+      provider.
+    reliability: high
+  - id: FD011
+    statement: Files read before the transfer match the selection in the scheduled
+      backup manifest.
+    reliability: high
+  - id: FD012
+    statement: The transfer correlates with an approved backup job identifier and
+      expected execution window.
+    reliability: confirmed
+  - id: FD013
+    statement: Forensic review found no host or network artifact showing a transfer
+      outside the approved backup channel.
+    reliability: high
+investigations:
+- id: I001
+  label: Inspect authentication source
+  performer_roles:
+  - soc
+  request_description: Determine where the suspicious authentication originated.
+  match_hints:
+  - login source
+  - source ip
+  - authentication origin
+  - where did the login come from
+  prerequisites:
+    all_evidence:
+    - O002
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I002
+  label: Review svc_backup normal behavior
+  performer_roles:
+  - soc
+  request_description: Determine whether the service account behavior is normal.
+  match_hints:
+  - normal behavior
+  - account baseline
+  - usual authentication
+  - does this account normally do this
+  prerequisites:
+    all_evidence:
+    - O002
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I003
+  label: Inspect post-login account activity
+  performer_roles:
+  - soc
+  request_description: Review actions performed by svc_backup after authentication.
+  match_hints:
+  - post login activity
+  - what did the account do
+  - account activity
+  - files accessed after login
+  prerequisites:
+    all_evidence:
+    - O002
+    any_evidence:
+    - O003
+    - FD001
+  duration_minutes: 10
+  repeatable: false
+- id: I004
+  label: Identify outbound destination
+  performer_roles:
+  - soc
+  request_description: Determine where the large outbound transfer was sent.
+  match_hints:
+  - outbound destination
+  - where did the traffic go
+  - where that traffic went
+  - approved service destination
+  - destination belongs to
+  prerequisites:
+    all_evidence:
+    - O004
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I005
+  label: Inspect files accessed before transfer
+  performer_roles:
+  - soc
+  request_description: Identify which files were accessed before the outbound transfer.
+  match_hints:
+  - files accessed
+  - data accessed before transfer
+  - what files were read
+  - customer files
+  prerequisites:
+    all_evidence:
+    - O004
+    - O005
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I006
+  label: Correlate outbound transfer with backup activity
+  performer_roles:
+  - soc
+  request_description: Compare the transfer with approved backup jobs and schedules.
+  match_hints:
+  - backup activity
+  - backup schedule
+  - approved backup
+  - expected backup process
+  prerequisites:
+    all_evidence:
+    - O004
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I007
+  label: Forensically determine transferred content
+  performer_roles:
+  - soc
+  request_description: Determine what content was included in the outbound transfer.
+  match_hints:
+  - transferred content
+  - what data left
+  - forensic transfer review
+  - archive contents
+  prerequisites:
+    all_evidence:
+    - O004
+    any_evidence:
+    - FD004
+    - FD010
+  duration_minutes: 15
+  repeatable: false
+timeline:
+- id: E001
+  at_minute: 5
+  role: soc
+  reveal_observations:
+  - O001
+- id: E002
+  at_minute: 10
+  role: soc
+  reveal_observations:
+  - O002
+- id: E003
+  at_minute: 20
+  role: soc
+  reveal_observations:
+  - O003
+- id: E004
+  at_minute: 40
+  role: ciso
+  reveal_observations:
+  - O001
+- id: E005
+  at_minute: 45
+  role: soc
+  reveal_observations:
+  - O004
+  - O005
+scoring:
+- id: involve_dpo
+  description: Involve the DPO promptly after the outbound-transfer observation.
+  type: role_contacted_within
+  points: 20
+  within_minutes: 30
+  trigger_evidence: O004
+  target_role: dpo
+- id: share_outbound_observation
+  description: Share the outbound-transfer observation with the DPO.
+  type: evidence_shared_within
+  points: 20
+  within_minutes: 30
+  trigger_evidence: O004
+  target_role: dpo
+  evidence_id: O004
+- id: timely_containment_decision
+  description: Make an explicit containment decision after ransomware activity is
+    observed.
+  type: decision_within
+  points: 30
+  within_minutes: 25
+  trigger_evidence: O001
+  decision_category: containment
+- id: avoid_premature_exfiltration_claim
+  description: Do not record exfiltration as confirmed before confirmation evidence
+    exists.
+  type: avoid_premature_assessment
+  points: 30
+  hypothesis_id: H002
+  conclusion_confidence: confirmed
+  confirmation_evidence: FD008

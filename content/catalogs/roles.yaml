@@ -1,5 +1,7 @@
+schema_version: 2
+
 roles:
-  - id: soc
+  soc:
     display_name: SOC Analyst
     responsibilities:
       - investigate technical indicators
@@ -22,7 +24,7 @@ roles:
       under_pressure: Become shorter and more methodical rather than more speculative.
     response_guidance: Distinguish observations from assessments and identify investigation gaps.
 
-  - id: ciso
+  ciso:
     display_name: Chief Information Security Officer
     responsibilities:
       - coordinate incident response
@@ -45,7 +47,7 @@ roles:
         - Make recommendations under uncertainty without overstating certainty.
       under_pressure: Become more directive and prioritize the next decision without becoming reckless.
 
-  - id: dpo
+  dpo:
     display_name: Data Protection Officer
     responsibilities:
       - assess potential personal-data exposure
@@ -68,7 +70,7 @@ roles:
       under_pressure: Remain composed and become more explicit about uncertainty and required evidence.
     response_guidance: Do not treat suspected exposure as a confirmed breach.
 
-  - id: ceo
+  ceo:
     display_name: Chief Executive Officer
     responsibilities:
       - set business priorities

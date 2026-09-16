@@ -1,3 +1,4 @@
+from copy import deepcopy
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -310,3 +311,11 @@ class RuntimeScenario(StrictModel):
         return next(
             entity for entity in self.external_entities if entity.id == entity_id
         )
+
+    def to_snapshot(self) -> dict[str, Any]:
+        snapshot = self.model_dump(mode="json")
+        snapshot["ground_truth"] = deepcopy(self.ground_truth)
+        snapshot["investigation_outcomes"] = [
+            item.model_dump(mode="json") for item in self.investigation_outcomes
+        ]
+        return snapshot

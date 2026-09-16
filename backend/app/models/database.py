@@ -21,6 +21,10 @@ class SessionRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     scenario_id: Mapped[str] = mapped_column(String(100), index=True)
     variant_id: Mapped[str] = mapped_column(String(100))
+    scenario_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scenario_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
     seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     simulation_time: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="created")

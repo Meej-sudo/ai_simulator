@@ -1,0 +1,68 @@
+schema_version: 2
+scenario_id: ransomware_001
+variants:
+- id: track_alpha
+  name: Track Alpha
+  ground_truth:
+    ransomware_intrusion: true
+    credential_compromise: true
+    data_exfiltration: true
+    legitimate_backup_transfer: false
+    outbound_traffic_cause: attacker_transfer
+  observation_overrides: []
+  timeline_overrides: []
+  investigation_outcomes:
+    I001:
+      reveal_findings:
+      - FD001
+    I002:
+      reveal_findings:
+      - FD002
+    I003:
+      reveal_findings:
+      - FD003
+    I004:
+      reveal_findings:
+      - FD004
+    I005:
+      reveal_findings:
+      - FD005
+    I006:
+      reveal_findings:
+      - FD006
+    I007:
+      reveal_findings:
+      - FD008
+      - FD009
+- id: track_bravo
+  name: Track Bravo
+  ground_truth:
+    ransomware_intrusion: true
+    credential_compromise: true
+    data_exfiltration: false
+    legitimate_backup_transfer: true
+    outbound_traffic_cause: approved_backup
+  observation_overrides: []
+  timeline_overrides: []
+  investigation_outcomes:
+    I001:
+      reveal_findings:
+      - FD001
+    I002:
+      reveal_findings:
+      - FD002
+    I003:
+      reveal_findings:
+      - FD003
+    I004:
+      reveal_findings:
+      - FD010
+    I005:
+      reveal_findings:
+      - FD011
+    I006:
+      reveal_findings:
+      - FD012
+    I007:
+      reveal_findings:
+      - FD013

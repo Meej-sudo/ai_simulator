@@ -113,7 +113,7 @@ export default function ScenarioEditor({ scenarioId, onSaved }: Props) {
       {open && (
         <div className="editor-body">
           <p className="editor-warning">
-            Changes are stored in the nine scenario YAML files after the complete scenario passes
+            Changes are stored in the two-file scenario package after the complete scenario passes
             validation. Update related IDs and references together before saving.
           </p>
 

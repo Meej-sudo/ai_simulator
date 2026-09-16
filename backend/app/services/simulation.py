@@ -49,10 +49,17 @@ class SimulationService:
         self, scenario_id: str, variant_id: str, seed: int | None
     ) -> SessionRecord:
         try:
-            self.scenarios.materialize(scenario_id, variant_id)
+            runtime = self.scenarios.materialize(scenario_id, variant_id)
+            scenario_version = self.scenarios.version(scenario_id)
         except (KeyError, ValueError) as exc:
             raise NotFoundError(str(exc)) from exc
-        session = self.repo.create(scenario_id, variant_id, seed)
+        session = self.repo.create(
+            scenario_id,
+            variant_id,
+            scenario_version,
+            runtime.to_snapshot(),
+            seed,
+        )
         self.repo.commit()
         return session
 
@@ -68,7 +75,12 @@ class SimulationService:
             raise InvalidOperationError("only a created session can be started")
         scenario = self._runtime_scenario(session)
         session.status = SessionStatus.RUNNING
-        self.repo.append_event(session.id, 0, EventType.SESSION_STARTED)
+        self.repo.append_event(
+            session.id,
+            0,
+            EventType.SESSION_STARTED,
+            payload={"scenario_version": session.scenario_version},
+        )
         for timeline_event in self.timeline_engine.starting_events(scenario.timeline):
             self._trigger_timeline_event(session, timeline_event)
         self.repo.commit()
@@ -577,7 +589,13 @@ class SimulationService:
         return session
 
     def _runtime_scenario(self, session: SessionRecord) -> RuntimeScenario:
-        return self.scenarios.materialize(session.scenario_id, session.variant_id)
+        if session.scenario_snapshot is not None:
+            return RuntimeScenario.model_validate(session.scenario_snapshot)
+        return self.scenarios.materialize(
+            session.scenario_id,
+            session.variant_id,
+            session.scenario_version,
+        )
 
     @staticmethod
     def _require_role(scenario: RuntimeScenario, role_id: str):

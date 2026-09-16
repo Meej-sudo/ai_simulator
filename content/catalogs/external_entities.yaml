@@ -1,18 +1,20 @@
+schema_version: 2
+
 external_entities:
-  - id: slovenian_dpa
-    display_name: Informacijski pooblaščenec
+  slovenian_dpa:
+    display_name: "Informacijski poobla\u0161\u010Denec"
     type: supervisory_authority
     accepts:
       - regulatory_notification
       - supplementary_notification
 
-  - id: police
+  police:
     display_name: Police
     type: law_enforcement
     accepts:
       - incident_report
 
-  - id: press
+  press:
     display_name: Media
     type: media
     accepts:

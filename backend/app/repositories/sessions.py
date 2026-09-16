@@ -11,10 +11,19 @@ class SessionRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def create(self, scenario_id: str, variant_id: str, seed: int | None) -> SessionRecord:
+    def create(
+        self,
+        scenario_id: str,
+        variant_id: str,
+        scenario_version: str,
+        scenario_snapshot: dict[str, Any],
+        seed: int | None,
+    ) -> SessionRecord:
         record = SessionRecord(
             scenario_id=scenario_id,
             variant_id=variant_id,
+            scenario_version=scenario_version,
+            scenario_snapshot=scenario_snapshot,
             seed=seed,
             status=SessionStatus.CREATED,
         )

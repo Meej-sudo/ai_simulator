@@ -31,6 +31,7 @@ class SessionResponse(BaseModel):
     id: str
     scenario_id: str
     variant_id: str
+    scenario_version: str | None
     seed: int | None
     simulation_time: int
     status: SessionStatus
@@ -188,7 +189,7 @@ class ScenarioDetailResponse(ScenarioSummaryResponse):
 
 
 class ScenarioSourcesUpdateRequest(BaseModel):
-    files: dict[str, str] = Field(min_length=9, max_length=9)
+    files: dict[str, str] = Field(min_length=2, max_length=2)
 
     @field_validator("files")
     @classmethod

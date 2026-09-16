@@ -9,7 +9,7 @@ class Settings(BaseSettings):
 
     app_name: str = "AI Incident Trainer"
     database_url: str = "postgresql+psycopg://trainer:trainer@db:5432/trainer"
-    scenarios_path: Path = Path(__file__).resolve().parents[3] / "scenarios"
+    scenarios_path: Path = Path(__file__).resolve().parents[3] / "content" / "scenarios"
     llm_provider: str | None = None
     llm_settings_path: Path = (
         Path(__file__).resolve().parents[3] / ".llm-config" / ".env"
