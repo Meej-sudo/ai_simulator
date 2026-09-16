@@ -149,6 +149,7 @@ activemq-data/
 
 # Environments
 .env
+.llm-config/.env
 .envrc
 .venv
 env/

@@ -1,4 +1,9 @@
+import asyncio
+import json
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,6 +21,8 @@ from app.schemas.api import (
     EventResponse,
     FactResponse,
     KnowledgeResponse,
+    LLMConfigurationResponse,
+    LLMModelsResponse,
     RoleResponse,
     ScenarioAuthoringResponse,
     ScenarioAuthoringUpdateRequest,
@@ -25,6 +32,7 @@ from app.schemas.api import (
     ScenarioSummaryResponse,
     SessionResponse,
     ShareFactRequest,
+    UpdateLLMConfigurationRequest,
     VariantResponse,
 )
 from app.services.errors import InvalidOperationError, NotFoundError
@@ -81,6 +89,48 @@ def scenario_summary(compiled) -> ScenarioSummaryResponse:
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def llm_configuration_response(request: Request) -> LLMConfigurationResponse:
+    configuration = request.app.state.llm_configuration
+    return LLMConfigurationResponse(
+        provider=configuration.selection.provider,
+        model=configuration.selection.model,
+        configured=configuration.configured,
+        available_providers=list(configuration.available_providers),
+    )
+
+
+@router.get("/settings/llm", response_model=LLMConfigurationResponse)
+def get_llm_configuration(request: Request):
+    return llm_configuration_response(request)
+
+
+@router.get("/settings/llm/models", response_model=LLMModelsResponse)
+async def get_llm_models(provider: str, request: Request):
+    try:
+        models = await request.app.state.llm_configuration.models(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return LLMModelsResponse(provider=provider, models=models)
+
+
+@router.put("/settings/llm", response_model=LLMConfigurationResponse)
+async def update_llm_configuration(
+    body: UpdateLLMConfigurationRequest,
+    request: Request,
+):
+    try:
+        await request.app.state.llm_configuration.update(body.provider, body.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    request.app.state.llm_provider = request.app.state.llm_configuration.provider
+    return llm_configuration_response(request)
 
 
 @router.get("/scenarios", response_model=list[ScenarioSummaryResponse])
@@ -189,7 +239,20 @@ def update_scenario_sources(
 
 
 @router.post("/sessions", response_model=SessionResponse, status_code=201)
-def create_session(body: CreateSessionRequest, service: SimulationService = Depends(get_service)):
+def create_session(
+    body: CreateSessionRequest,
+    request: Request,
+    service: SimulationService = Depends(get_service),
+):
+    configuration = getattr(request.app.state, "llm_configuration", None)
+    if configuration is not None and not configuration.configured:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "No AI model is configured. Select a provider and model before "
+                "starting an exercise."
+            ),
+        )
     return call(lambda: service.create_session(body.scenario_id, body.variant_id, body.seed))
 
 
@@ -254,6 +317,68 @@ async def ask_role(
     service: SimulationService = Depends(get_service),
 ):
     return await call_async(lambda: service.ask_role(session_id, body.target_role, body.message))
+
+
+def stream_event(event_type: str, **payload) -> str:
+    return json.dumps({"type": event_type, **payload}, ensure_ascii=False) + "\n"
+
+
+def markdown_chunks(message: str, target_size: int = 36):
+    chunk = ""
+    for token in re.findall(r"\S+\s*|\s+", message):
+        chunk += token
+        if len(chunk) >= target_size:
+            yield chunk
+            chunk = ""
+    if chunk:
+        yield chunk
+
+
+@router.post("/sessions/{session_id}/ask/stream")
+async def ask_role_stream(
+    session_id: str,
+    body: AskRoleRequest,
+    service: SimulationService = Depends(get_service),
+):
+    async def events():
+        # Flush headers and let the UI show its warmup cursor before inference.
+        yield stream_event("start")
+        try:
+            response = await service.ask_role_stream(
+                session_id,
+                body.target_role,
+                body.message,
+            )
+        except NotFoundError as exc:
+            yield stream_event("error", detail=str(exc), status=404)
+            return
+        except InvalidOperationError as exc:
+            yield stream_event("error", detail=str(exc), status=409)
+            return
+        except LLMProviderError as exc:
+            yield stream_event("error", detail=str(exc), status=502)
+            return
+
+        # Provider output is held until fact-boundary validation succeeds, then
+        # released in readable Markdown chunks so unsafe output is never leaked.
+        for chunk in markdown_chunks(response.message):
+            yield stream_event("delta", content=chunk)
+            await asyncio.sleep(0.018)
+
+        yield stream_event(
+            "complete",
+            referenced_fact_ids=response.referenced_fact_ids,
+            certainty=response.certainty.value,
+        )
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

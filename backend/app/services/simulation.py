@@ -128,6 +128,29 @@ class SimulationService:
         return shared
 
     async def ask_role(self, session_id: str, target_role: str, message: str):
+        return await self._ask_role(
+            session_id,
+            target_role,
+            message,
+            use_provider_stream=False,
+        )
+
+    async def ask_role_stream(self, session_id: str, target_role: str, message: str):
+        return await self._ask_role(
+            session_id,
+            target_role,
+            message,
+            use_provider_stream=True,
+        )
+
+    async def _ask_role(
+        self,
+        session_id: str,
+        target_role: str,
+        message: str,
+        *,
+        use_provider_stream: bool,
+    ):
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         role = self._require_role(scenario, target_role)
@@ -153,7 +176,10 @@ class SimulationService:
             },
             trainee_question=message,
         )
-        validated = await self.role_responder.generate(request)
+        if use_provider_stream:
+            validated = await self.role_responder.generate_streamed(request)
+        else:
+            validated = await self.role_responder.generate(request)
         for violation in validated.violations:
             self.repo.append_event(
                 session.id,

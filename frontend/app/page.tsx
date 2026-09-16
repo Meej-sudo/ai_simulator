@@ -1,9 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
+import ModelConfiguration from "./ModelConfiguration";
 import ScenarioEditor from "./ScenarioEditor";
-import { api } from "./api";
+import { api, streamApi } from "./api";
 
 type Variant = { id: string; name: string };
 type DecisionCategory = {
@@ -60,6 +63,7 @@ export default function Home() {
   const [targetRole, setTargetRole] = useState("soc");
   const [question, setQuestion] = useState("What do we know so far?");
   const [answer, setAnswer] = useState("");
+  const [answerStreaming, setAnswerStreaming] = useState(false);
   const [shareFrom, setShareFrom] = useState("soc");
   const [shareTo, setShareTo] = useState("dpo");
   const [shareFact, setShareFact] = useState("");
@@ -70,6 +74,7 @@ export default function Home() {
   const [rationale, setRationale] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null);
 
   const selected = useMemo(
     () => scenarios.find((item) => item.id === scenarioId),
@@ -191,12 +196,23 @@ export default function Home() {
     event.preventDefault();
     return run(async () => {
       if (!session) return;
-      const result = await api<{ message: string }>(`/sessions/${session.id}/ask`, {
-        method: "POST",
-        body: JSON.stringify({ target_role: targetRole, message: question }),
-      });
-      setAnswer(result.message);
-      await refresh();
+      setAnswer("");
+      setAnswerStreaming(true);
+      try {
+        for await (const event of streamApi(`/sessions/${session.id}/ask/stream`, {
+          method: "POST",
+          body: JSON.stringify({ target_role: targetRole, message: question }),
+        })) {
+          if (event.type === "delta") {
+            setAnswer((current) => current + event.content);
+          } else if (event.type === "error") {
+            throw new Error(event.detail);
+          }
+        }
+        await refresh();
+      } finally {
+        setAnswerStreaming(false);
+      }
     });
   }
 
@@ -278,6 +294,12 @@ export default function Home() {
               <small>Audit reference {completedExercise.sessionId}</small>
             </div>
           )}
+          {llmConfigured !== true && (
+            <>
+              <ModelConfiguration onConfigurationChange={setLlmConfigured} />
+              <div className="launch-divider" />
+            </>
+          )}
           <div>
             <span className="kicker">NEW EXERCISE</span>
             <h2>Choose a deterministic incident track</h2>
@@ -307,9 +329,20 @@ export default function Home() {
               ))}
             </select>
           </label>
-          <button disabled={busy || !variantId} onClick={createSession}>Start exercise</button>
+          <button
+            disabled={busy || !variantId || llmConfigured !== true}
+            onClick={createSession}
+          >
+            Start exercise
+          </button>
           {scenarioId && (
             <ScenarioEditor scenarioId={scenarioId} onSaved={handleScenarioSaved} />
+          )}
+          {llmConfigured === true && (
+            <>
+              <div className="launch-divider" />
+              <ModelConfiguration onConfigurationChange={setLlmConfigured} />
+            </>
           )}
         </section>
       ) : (
@@ -339,7 +372,15 @@ export default function Home() {
               <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} />
               <button disabled={busy || !question.trim()}>Send question</button>
             </form>
-            {answer && <blockquote>{answer}</blockquote>}
+            {(answer || answerStreaming) && (
+              <div
+                className={`answer-markdown${answerStreaming ? " is-streaming" : ""}`}
+                aria-live="polite"
+                aria-busy={answerStreaming}
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+              </div>
+            )}
 
             <div className="action-divider"><span>Structured actions</span></div>
             <div className="action-grid">

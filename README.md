@@ -121,6 +121,7 @@ below.
 | Session mutation | Start, advance, ask, share, decide, and complete operations are constrained by session state and validated request schemas. Completed sessions reject further exercise commands. |
 | Database access | PostgreSQL is available to the backend on the Compose network and is not published as a host port by the supplied Compose file. |
 | Scenario modification | The authoring and source endpoints validate complete updates, write them atomically, and reload the in-memory registry. The scenario directory is mounted read-write in Docker. |
+| AI model configuration | Ollama models are discovered through the backend. A saved provider/model pair is written atomically to `.llm-config/.env` and replaces the in-memory provider. The UI prevents exercise launch while no model is configured. |
 | OpenAI retention request | The OpenAI adapter requests `store=False`. The selected provider still receives the role prompt, permitted facts, and trainee question and remains subject to that provider's processing and logging controls. |
 
 These are simulation and application-state boundaries. They are not user or
@@ -141,6 +142,9 @@ Consequences of the current design include:
 - Any client that can reach the authoring API can read scenario ground truth and
   submit validated changes to the scenario files. There is no separate author
   identity or permission check.
+- Any client that can reach the model-settings API can discover Ollama models
+  and change the provider/model used for subsequent prompts. Keep this
+  administrative surface on a trusted network.
 - `GET /sessions/{id}/roles/{role_id}/knowledge` has no caller authorization.
   The frontend intentionally fetches every role's knowledge so it can populate
   the facilitator's sharing controls. This means role-specific knowledge is
@@ -184,7 +188,7 @@ requirement rather than a training-game rule.
 
 ## Run with Docker
 
-The default configuration uses `FakeLLMProvider`, so no API key is required:
+Start the application without a preselected model:
 
 ```bash
 docker compose up --build
@@ -200,25 +204,34 @@ The browser uses the frontend's same-origin `/api` path. Next.js proxies those
 requests to the backend service, so the UI also works when opened through a server
 IP or hostname without requiring browser CORS configuration.
 
-To use OpenAI, copy `.env.example` to `.env`, set `LLM_PROVIDER=openai`, and provide `OPENAI_API_KEY`. `OPENAI_MODEL` is configurable.
-
-To use the local Ollama server, set these values in `.env`:
+For Ollama, copy `.env.example` to `.env` and set the URL of the Ollama server:
 
 ```env
-LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://your-ollama-host:11434
-OLLAMA_MODEL=gpt-oss:120b
+OLLAMA_DISCOVERY_TIMEOUT_SECONDS=10
 OLLAMA_TIMEOUT_SECONDS=300
 ```
 
+Open **AI model configuration** on the setup page. Choosing Ollama automatically
+discovers its installed models. Save one before starting an exercise. The active
+provider and model are applied immediately and written to `.llm-config/.env`, which
+is host-mounted into the backend and survives container restarts. The file is
+runtime state and is intentionally excluded from Git.
+
+No provider or model is selected by default. Until a model is saved, the setup
+page displays a warning, disables **Start exercise**, and the backend rejects new
+sessions and role prompts with a configuration error. Ollama is the first provider
+exposed through this UI; the existing OpenAI adapter remains available for future
+configuration support.
+
 The Ollama adapter calls the native `/api/chat` endpoint with a JSON schema for
 `RoleResponse`. Responses still go through the same knowledge-boundary validation,
-retry, safe fallback, and audit logging as the other providers. Rebuild and recreate
-the backend after enabling the provider:
-
-```bash
-docker compose up -d --build backend
-```
+retry, safe fallback, and audit logging as the other providers. The exercise UI
+uses `/sessions/{id}/ask/stream`: Ollama's structured response arrives through its
+streaming transport, is buffered until the fact-boundary checks pass, and is then
+released as newline-delimited JSON chunks. This keeps unsafe output from reaching
+the browser while still providing a warmup cursor and progressive Markdown
+rendering. The cursor is removed when the final completion event arrives.
 
 ## Backend development
 

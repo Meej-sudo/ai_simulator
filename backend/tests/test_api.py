@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +53,21 @@ def test_http_session_workflow_includes_auditable_timestamps(tmp_path: Path):
         assert client.post(
             f"/sessions/{session_id}/advance-time", json={"minutes": 45}
         ).status_code == 200
+
+        streamed = client.post(
+            f"/sessions/{session_id}/ask/stream",
+            json={"target_role": "soc", "message": "What happened?"},
+        )
+        stream_events = [json.loads(line) for line in streamed.text.splitlines()]
+        assert streamed.status_code == 200
+        assert stream_events[0] == {"type": "start"}
+        assert any(event["type"] == "delta" for event in stream_events)
+        assert stream_events[-1]["type"] == "complete"
+        assert "Based on what I currently know" in "".join(
+            event["content"]
+            for event in stream_events
+            if event["type"] == "delta"
+        )
 
         events = client.get(f"/sessions/{session_id}/events")
         assert events.status_code == 200
@@ -128,3 +145,84 @@ def test_llm_failure_returns_cors_enabled_bad_gateway(tmp_path: Path):
         "detail": "Could not connect to Ollama at http://ollama:11434"
     }
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+class StubLLMConfiguration:
+    available_providers = ("ollama",)
+
+    def __init__(self):
+        self.selection = SimpleNamespace(provider=None, model=None)
+        self.provider = None
+        self.configured = False
+
+    async def models(self, provider: str):
+        assert provider == "ollama"
+        return ["llama3.2:latest", "qwen3.8-flash-next"]
+
+    async def update(self, provider: str, model: str):
+        self.selection = SimpleNamespace(provider=provider, model=model)
+        self.provider = FakeLLMProvider()
+        self.configured = True
+
+
+def test_llm_configuration_api_discovers_and_applies_model():
+    app = FastAPI()
+    app.state.llm_configuration = StubLLMConfiguration()
+    app.state.llm_provider = None
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        initial = client.get("/settings/llm")
+        models = client.get("/settings/llm/models", params={"provider": "ollama"})
+        updated = client.put(
+            "/settings/llm",
+            json={"provider": "ollama", "model": "qwen3.8-flash-next"},
+        )
+
+    assert initial.status_code == 200
+    assert initial.json() == {
+        "provider": None,
+        "model": None,
+        "configured": False,
+        "available_providers": ["ollama"],
+    }
+    assert models.json() == {
+        "provider": "ollama",
+        "models": ["llama3.2:latest", "qwen3.8-flash-next"],
+    }
+    assert updated.status_code == 200
+    assert updated.json()["configured"] is True
+    assert updated.json()["model"] == "qwen3.8-flash-next"
+    assert isinstance(app.state.llm_provider, FakeLLMProvider)
+
+
+def test_session_creation_requires_configured_model(tmp_path: Path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'unconfigured.sqlite3'}")
+    Base.metadata.create_all(engine)
+    database = Session(engine)
+    registry = ScenarioRegistry(SCENARIOS)
+    registry.load()
+    app = FastAPI()
+    app.state.scenarios = registry
+    app.state.llm_provider = FakeLLMProvider()
+    app.state.llm_configuration = SimpleNamespace(configured=False)
+    app.include_router(router)
+
+    def database_override():
+        yield database
+
+    app.dependency_overrides[get_db] = database_override
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": (
+            "No AI model is configured. Select a provider and model before "
+            "starting an exercise."
+        )
+    }
