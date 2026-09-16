@@ -1,10 +1,35 @@
+from threading import Lock
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from app.domain.simulation.models import EventSnapshot, EventType, SessionStatus
 from app.models.database import EventRecord, SessionRecord
+
+
+_sequence_locks_guard = Lock()
+_sequence_locks: dict[str, Lock] = {}
+_HELD_LOCKS_KEY = "incident_trainer_sequence_locks"
+
+
+def _hold_sequence_lock(db: Session, session_id: str) -> None:
+    held = db.info.setdefault(_HELD_LOCKS_KEY, {})
+    if session_id in held:
+        return
+    with _sequence_locks_guard:
+        lock = _sequence_locks.setdefault(session_id, Lock())
+    lock.acquire()
+    held[session_id] = lock
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _release_sequence_locks(db: Session, transaction) -> None:
+    if transaction.parent is not None:
+        return
+    held = db.info.pop(_HELD_LOCKS_KEY, {})
+    for lock in held.values():
+        lock.release()
 
 
 class SessionRepository:
@@ -44,8 +69,18 @@ class SessionRepository:
         target_role: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> EventRecord:
+        # PostgreSQL serializes writers on the owning session row. SQLite ignores
+        # FOR UPDATE, so the process-local lock is held until transaction end.
+        _hold_sequence_lock(self.db, session_id)
+        self.db.scalar(
+            select(SessionRecord.id)
+            .where(SessionRecord.id == session_id)
+            .with_for_update()
+        )
         last_sequence = self.db.scalar(
-            select(func.max(EventRecord.sequence)).where(EventRecord.session_id == session_id)
+            select(func.max(EventRecord.sequence)).where(
+                EventRecord.session_id == session_id
+            )
         )
         event = EventRecord(
             session_id=session_id,

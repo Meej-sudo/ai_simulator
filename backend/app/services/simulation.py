@@ -20,6 +20,7 @@ from app.llm.models import (
     EligibleInvestigation,
     InvestigationInterpretationRequest,
     RoleResponseRequest,
+    ThreadTurn,
 )
 from app.llm.validation import (
     ConstrainedAssessmentInterpreter,
@@ -181,19 +182,33 @@ class SimulationService:
         """Compatibility alias for clients migrating to share-evidence."""
         return self.share_evidence(session_id, from_role, to_role, fact_id)
 
-    async def ask_role(self, session_id: str, target_role: str, message: str):
+    async def ask_role(
+        self,
+        session_id: str,
+        target_role: str,
+        message: str,
+        cited_evidence_ids: list[str] | None = None,
+    ):
         return await self._ask_role(
             session_id,
             target_role,
             message,
+            cited_evidence_ids or [],
             use_provider_stream=False,
         )
 
-    async def ask_role_stream(self, session_id: str, target_role: str, message: str):
+    async def ask_role_stream(
+        self,
+        session_id: str,
+        target_role: str,
+        message: str,
+        cited_evidence_ids: list[str] | None = None,
+    ):
         return await self._ask_role(
             session_id,
             target_role,
             message,
+            cited_evidence_ids or [],
             use_provider_stream=True,
         )
 
@@ -202,19 +217,32 @@ class SimulationService:
         session_id: str,
         target_role: str,
         message: str,
+        cited_evidence_ids: list[str],
         *,
         use_provider_stream: bool,
     ):
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         role = self._require_role(scenario, target_role)
+        self._share_external_evidence(
+            session,
+            scenario,
+            cited_evidence_ids,
+            [target_role],
+            thread_id=f"dm:{target_role}",
+        )
         knowledge = self.role_knowledge(session.id, target_role)
+        history = self._role_thread_history(session.id, target_role)
         self.repo.append_event(
             session.id,
             session.simulation_time,
             EventType.QUESTION_ASKED,
             target_role=target_role,
-            payload={"message": message},
+            payload={
+                "message": message,
+                "thread_id": f"dm:{target_role}",
+                "cited_evidence_ids": cited_evidence_ids,
+            },
         )
         request = RoleResponseRequest(
             role_id=role.id,
@@ -226,6 +254,7 @@ class SimulationService:
             simulation_time=session.simulation_time,
             permitted_observations=knowledge.observations,
             permitted_findings=knowledge.findings,
+            thread_history=history,
             trainee_question=message,
         )
         if use_provider_stream:
@@ -247,6 +276,115 @@ class SimulationService:
         )
         self.repo.commit()
         return response
+
+    def post_message(
+        self,
+        session_id: str,
+        thread_id: str,
+        text: str,
+        cited_evidence_ids: list[str],
+    ):
+        session = self._running_session(session_id)
+        scenario = self._runtime_scenario(session)
+        recipients = self._thread_recipients(scenario, thread_id)
+        self._share_external_evidence(
+            session,
+            scenario,
+            cited_evidence_ids,
+            recipients,
+            thread_id=thread_id,
+        )
+        event = self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.MESSAGE_POSTED,
+            payload={
+                "thread_id": thread_id,
+                "text": text,
+                "cited_evidence_ids": cited_evidence_ids,
+                "sender": "trainee",
+            },
+        )
+        self.repo.commit()
+        return event
+
+    def _thread_recipients(
+        self,
+        scenario: RuntimeScenario,
+        thread_id: str,
+    ) -> list[str]:
+        if thread_id == "channel:bridge":
+            return [role.id for role in scenario.roles]
+        if thread_id.startswith("dm:"):
+            role_id = thread_id.removeprefix("dm:")
+            self._require_role(scenario, role_id)
+            return [role_id]
+        raise InvalidOperationError(f"unknown conversation thread: {thread_id}")
+
+    def _share_external_evidence(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        evidence_ids: list[str],
+        recipients: list[str],
+        *,
+        thread_id: str,
+    ) -> None:
+        discovered = set().union(
+            *(
+                self.role_knowledge(session.id, role.id).evidence_ids
+                for role in scenario.roles
+            )
+        )
+        unknown = sorted(set(evidence_ids) - discovered)
+        if unknown:
+            raise InvalidOperationError(
+                "cannot cite evidence that has not been discovered: "
+                + ", ".join(unknown)
+            )
+        for role_id in recipients:
+            known = self.role_knowledge(session.id, role_id).evidence_ids
+            for evidence_id in dict.fromkeys(evidence_ids):
+                if evidence_id in known:
+                    continue
+                self.repo.append_event(
+                    session.id,
+                    session.simulation_time,
+                    EventType.EVIDENCE_SHARED,
+                    target_role=role_id,
+                    payload={"evidence_id": evidence_id, "thread_id": thread_id},
+                )
+
+    def _role_thread_history(
+        self,
+        session_id: str,
+        target_role: str,
+    ) -> list[ThreadTurn]:
+        turns: list[ThreadTurn] = []
+        for event in self.repo.events(session_id):
+            if (
+                event.event_type == EventType.QUESTION_ASKED
+                and event.target_role == target_role
+            ):
+                turns.append(
+                    ThreadTurn(
+                        speaker="trainee",
+                        text=str(event.payload.get("message", "")),
+                        simulation_time=event.simulation_time,
+                    )
+                )
+            elif (
+                event.event_type == EventType.ROLE_RESPONDED
+                and event.actor_role == target_role
+            ):
+                turns.append(
+                    ThreadTurn(
+                        speaker="role",
+                        text=str(event.payload.get("message", "")),
+                        simulation_time=event.simulation_time,
+                    )
+                )
+        return turns[-6:]
 
     async def request_investigation(
         self,

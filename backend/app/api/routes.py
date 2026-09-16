@@ -31,6 +31,7 @@ from app.schemas.api import (
     LLMConfigurationResponse,
     LLMModelsResponse,
     ObservationResponse,
+    PostMessageRequest,
     RoleResponse,
     ScenarioAuthoringResponse,
     ScenarioAuthoringUpdateRequest,
@@ -354,7 +355,12 @@ async def ask_role(
     service: SimulationService = Depends(get_service),
 ):
     return await call_async(
-        lambda: service.ask_role(session_id, body.target_role, body.message)
+        lambda: service.ask_role(
+            session_id,
+            body.target_role,
+            body.message,
+            body.cited_evidence_ids,
+        )
     )
 
 
@@ -410,6 +416,7 @@ async def ask_role_stream(
                 session_id,
                 body.target_role,
                 body.message,
+                body.cited_evidence_ids,
             )
         except NotFoundError as exc:
             yield stream_event("error", detail=str(exc), status=404)
@@ -440,6 +447,30 @@ async def ask_role_stream(
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/threads/{thread_id:path}/messages",
+    response_model=ActionAcceptedResponse,
+)
+def post_message(
+    session_id: str,
+    thread_id: str,
+    body: PostMessageRequest,
+    service: SimulationService = Depends(get_service),
+):
+    event = call(
+        lambda: service.post_message(
+            session_id,
+            thread_id,
+            body.text,
+            body.cited_evidence_ids,
+        )
+    )
+    return ActionAcceptedResponse(
+        event_id=event.id,
+        simulation_time=event.simulation_time,
     )
 
 

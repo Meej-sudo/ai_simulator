@@ -19,6 +19,13 @@ def _evidence_lines(request: RoleResponseRequest) -> str:
     )
 
 
+def _history_lines(request: RoleResponseRequest) -> str:
+    return "\n".join(
+        f"- Minute {item.simulation_time}, {item.speaker}: {item.text}"
+        for item in request.thread_history
+    ) or "- No earlier messages in this conversation."
+
+
 def build_system_prompt(request: RoleResponseRequest) -> str:
     responsibilities = "\n".join(f"- {item}" for item in request.responsibilities)
     retry = (
@@ -54,6 +61,9 @@ Personality affects manner, emphasis, and interaction style only. It must not ad
 
 CURRENT SIMULATION TIME
 Minute {request.simulation_time}
+
+CONVERSATION SO FAR
+{_history_lines(request)}
 
 CURRENT ROLE-SCOPED EVIDENCE
 {_evidence_lines(request)}

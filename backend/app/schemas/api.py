@@ -45,6 +45,7 @@ class AdvanceTimeRequest(BaseModel):
 class AskRoleRequest(BaseModel):
     target_role: str
     message: str = Field(min_length=1, max_length=4000)
+    cited_evidence_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class AskRoleResponse(BaseModel):
@@ -119,6 +120,11 @@ class DecisionRequest(BaseModel):
 class ActionAcceptedResponse(BaseModel):
     event_id: str
     simulation_time: int
+
+
+class PostMessageRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    cited_evidence_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ObservationResponse(BaseModel):

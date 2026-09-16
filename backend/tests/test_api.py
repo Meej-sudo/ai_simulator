@@ -288,3 +288,39 @@ def test_session_creation_requires_configured_model(tmp_path: Path):
             "starting an exercise."
         )
     }
+
+
+
+def test_bridge_message_endpoint_supports_external_trainee(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        created = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        )
+        session_id = created.json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 10})
+
+        posted = client.post(
+            f"/sessions/{session_id}/threads/channel%3Abridge/messages",
+            json={
+                "text": "Use this observation in the coordinated response.",
+                "cited_evidence_ids": ["O001"],
+            },
+        )
+
+        assert posted.status_code == 200
+        events = client.get(f"/sessions/{session_id}/events").json()
+        message = next(
+            event for event in events if event["event_type"] == "MESSAGE_POSTED"
+        )
+        assert message["actor_role"] is None
+        assert message["payload"]["thread_id"] == "channel:bridge"
+        for role in client.get(f"/sessions/{session_id}/roles").json():
+            knowledge = client.get(
+                f"/sessions/{session_id}/roles/{role['id']}/knowledge"
+            ).json()
+            assert "O001" in {
+                item["id"]
+                for item in [*knowledge["observations"], *knowledge["findings"]]
+            }

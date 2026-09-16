@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,6 +21,14 @@ class ResponseCertainty(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ThreadTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    speaker: Literal["trainee", "role"]
+    text: str
+    simulation_time: int
+
+
 class RoleResponseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -32,6 +41,7 @@ class RoleResponseRequest(BaseModel):
     simulation_time: int
     permitted_observations: list[ObservationDefinition]
     permitted_findings: list[FindingDefinition]
+    thread_history: list[ThreadTurn] = Field(default_factory=list)
     trainee_question: str
     retry_instruction: str | None = None
 
