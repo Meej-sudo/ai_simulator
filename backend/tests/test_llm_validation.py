@@ -1,8 +1,12 @@
+import json
+
 from app.domain.scenarios.models import (
     CommunicationStyle,
     FindingDefinition,
     HypothesisDefinition,
     ObservationDefinition,
+    PersonalityProfile,
+    PersonalityTraits,
 )
 from app.llm.models import (
     AssessmentInterpretation,
@@ -49,6 +53,22 @@ class LeakingProvider:
         )
 
 
+class StreamingSafeProvider:
+    async def generate_role_response(self, request):
+        raise AssertionError("non-streaming provider method should not be used")
+
+    async def stream_role_response(self, request):
+        content = json.dumps(
+            {
+                "message": "**Confirmed:** A failed login was observed.",
+                "referenced_evidence_ids": ["O001"],
+                "certainty": "confirmed",
+            }
+        )
+        yield content[:20]
+        yield content[20:]
+
+
 def observation() -> ObservationDefinition:
     return ObservationDefinition(
         id="O001",
@@ -58,17 +78,37 @@ def observation() -> ObservationDefinition:
     )
 
 
-async def test_role_response_retries_once_then_returns_safe_fallback():
-    request = RoleResponseRequest(
+def personality() -> PersonalityProfile:
+    return PersonalityProfile(
+        summary="Calm and skeptical.",
+        traits=PersonalityTraits(
+            openness="high",
+            conscientiousness="high",
+            extraversion="low",
+            agreeableness="medium",
+            emotional_stability="high",
+        ),
+        behavioral_tendencies=["Lead with evidence."],
+        under_pressure="Become more methodical.",
+    )
+
+
+def role_request() -> RoleResponseRequest:
+    return RoleResponseRequest(
         role_id="soc",
         role_display_name="SOC Analyst",
         responsibilities=["investigate"],
         communication_style=CommunicationStyle(tone="technical", verbosity="medium"),
+        personality=personality(),
         simulation_time=10,
         permitted_observations=[observation()],
         permitted_findings=[],
         trainee_question="What happened?",
     )
+
+
+async def test_role_response_retries_once_then_returns_safe_fallback():
+    request = role_request()
 
     result = await ConstrainedRoleResponder(LeakingProvider()).generate(request)
 
@@ -146,3 +186,15 @@ def test_interpreter_requests_contain_no_outcomes_or_ground_truth_fields():
     assert "ground_truth" not in serialized
     assert "outcome" not in serialized
     assert "reveal_findings" not in serialized
+
+
+async def test_streamed_provider_output_is_buffered_and_validated():
+    request = role_request()
+
+    result = await ConstrainedRoleResponder(StreamingSafeProvider()).generate_streamed(
+        request
+    )
+
+    assert result.violations == []
+    assert result.response.message.startswith("**Confirmed:**")
+    assert result.response.referenced_evidence_ids == ["O001"]

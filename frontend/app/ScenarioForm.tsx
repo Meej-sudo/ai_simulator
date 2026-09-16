@@ -5,6 +5,7 @@ import { useState } from "react";
 import type {
   Confidence,
   InvestigationDefinition,
+  PersonalityProfile,
   ScenarioDocument,
   ScoringRule,
   ScoringRuleType,
@@ -33,6 +34,34 @@ const scoringTypes: ScoringRuleType[] = [
   "decision_within",
   "avoid_premature_assessment",
 ];
+
+const personalityTraits: {
+  id: keyof PersonalityProfile["traits"];
+  label: string;
+}[] = [
+  { id: "openness", label: "Openness" },
+  { id: "conscientiousness", label: "Conscientiousness" },
+  { id: "extraversion", label: "Extraversion" },
+  { id: "agreeableness", label: "Agreeableness" },
+  { id: "emotional_stability", label: "Emotional stability" },
+];
+
+function defaultPersonality(): PersonalityProfile {
+  return {
+    summary: "Calm, professional, and focused on the role's responsibilities.",
+    traits: {
+      openness: "medium",
+      conscientiousness: "medium",
+      extraversion: "medium",
+      agreeableness: "medium",
+      emotional_stability: "medium",
+    },
+    behavioral_tendencies: [
+      "Communicate clearly and identify what information is still needed.",
+    ],
+    under_pressure: "Remain professional and focus on the next useful action.",
+  };
+}
 
 function replaceAt<T>(items: T[], index: number, item: T): T[] {
   return items.map((current, currentIndex) => currentIndex === index ? item : current);
@@ -455,7 +484,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
         <section className="form-section">
           <Heading
             title="Simulation roles"
-            description="Role responsibilities and communication style constrain role chat."
+            description="Role responsibilities, communication style, and personality constrain role chat."
             addLabel="Add role"
             onAdd={() => onChange({
               ...document,
@@ -466,6 +495,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
                   display_name: "New role",
                   responsibilities: ["Describe this role's responsibility"],
                   communication_style: { tone: "professional", verbosity: "medium" },
+                  personality: defaultPersonality(),
                   response_guidance: null,
                 },
               ],
@@ -528,6 +558,67 @@ export default function ScenarioForm({ document, onChange }: Props) {
                       <option value="high">High</option>
                     </select>
                   </label>
+                  <TextField
+                    label="Personality summary"
+                    value={item.personality.summary}
+                    onChange={(value) => onChange({
+                      ...document,
+                      roles: replaceAt(document.roles, index, {
+                        ...item,
+                        personality: { ...item.personality, summary: value },
+                      }),
+                    })}
+                  />
+                  {personalityTraits.map((trait) => (
+                    <label key={trait.id}>
+                      {trait.label}
+                      <select
+                        value={item.personality.traits[trait.id]}
+                        onChange={(event) => onChange({
+                          ...document,
+                          roles: replaceAt(document.roles, index, {
+                            ...item,
+                            personality: {
+                              ...item.personality,
+                              traits: {
+                                ...item.personality.traits,
+                                [trait.id]: event.target.value as "low" | "medium" | "high",
+                              },
+                            },
+                          }),
+                        })}
+                      >
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                    </label>
+                  ))}
+                  <TextField
+                    label="Behavioral tendencies (one per line)"
+                    value={item.personality.behavioral_tendencies.join("\n")}
+                    onChange={(value) => onChange({
+                      ...document,
+                      roles: replaceAt(document.roles, index, {
+                        ...item,
+                        personality: {
+                          ...item.personality,
+                          behavioral_tendencies: lines(value),
+                        },
+                      }),
+                    })}
+                  />
+                  <TextField
+                    label="Behavior under pressure"
+                    value={item.personality.under_pressure}
+                    onChange={(value) => onChange({
+                      ...document,
+                      roles: replaceAt(document.roles, index, {
+                        ...item,
+                        personality: { ...item.personality, under_pressure: value },
+                      }),
+                    })}
+                  />
                   <TextField
                     label="Response guidance"
                     value={item.response_guidance ?? ""}

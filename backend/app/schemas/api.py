@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -56,6 +56,27 @@ class ShareEvidenceRequest(BaseModel):
     from_role: str
     to_role: str
     evidence_id: str
+
+
+class LLMConfigurationResponse(BaseModel):
+    provider: str | None
+    model: str | None
+    configured: bool
+    available_providers: list[str]
+
+
+class LLMModelsResponse(BaseModel):
+    provider: str
+    models: list[str]
+
+
+class UpdateLLMConfigurationRequest(BaseModel):
+    provider: Literal["ollama"]
+    model: str = Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+    )
 
 
 class ShareFactRequest(BaseModel):

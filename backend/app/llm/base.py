@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from .models import (
@@ -24,4 +25,12 @@ class LLMProvider(Protocol):
     async def interpret_assessment(
         self, request: AssessmentInterpretationRequest
     ) -> AssessmentInterpretation:
+        ...
+
+
+class StreamingLLMProvider(Protocol):
+    def stream_role_response(
+        self, request: RoleResponseRequest
+    ) -> AsyncIterator[str]:
+        """Yield raw structured-response fragments from the provider."""
         ...

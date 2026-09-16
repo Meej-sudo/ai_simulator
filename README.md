@@ -104,9 +104,155 @@ serialization and are absent from every LLM request model. Public event listing
 also redacts observation, finding, and evidence-share payloads. A role obtains
 evidence through its role-scoped knowledge endpoint.
 
+## System operation and information access
+
+### Components and data flow
+
+```text
+Browser
+  | HTTP to :3000; same-origin /api requests
+  v
+Next.js frontend
+  | server-side rewrite to http://backend:8000
+  v
+FastAPI backend ---------------------------------> OpenAI or Ollama
+  |                                                  role prompt, current role facts,
+  |                                                  and the trainee's question only
+  +----> in-memory scenario registry
+  |      roles, facts, timelines, variants,
+  |      hidden ground truth, and scoring rules
+  |
+  +----> PostgreSQL
+         sessions and ordered audit events
+```
+
+At startup, the backend reads and validates the YAML files under `scenarios/` and
+keeps the compiled scenario catalog in memory. The Docker deployment mounts that
+directory read-write so the scenario-authoring endpoints can persist validated
+changes. PostgreSQL stores session state and the event history; it does not store
+the scenario definitions themselves.
+
+The normal exercise flow is:
+
+1. The frontend lists public scenario metadata, variants, decision categories,
+   and role descriptions, then creates and starts a session.
+2. Advancing the logical clock fires due timeline events. Each grant produces a
+   `FACT_LEARNED` event for one role.
+3. Current knowledge is reconstructed by replaying that role's `FACT_LEARNED`
+   events through the current simulation time. Facts are therefore not globally
+   known merely because they exist in `facts.yaml`.
+4. Sharing a fact is a controlled state transition. The service verifies that
+   the sending role currently knows the fact, records `FACT_SHARED`, and grants
+   it to the receiving role with another `FACT_LEARNED` event.
+5. Asking a role causes the backend to assemble an LLM request from that role's
+   identity, guidance, current facts, confidence levels, the current time, and
+   the trainee's question. Other roles' facts, future timeline grants, scoring
+   rules, and variant ground truth are not added to the request.
+6. The LLM must return a structured response. The backend rejects references to
+   fact IDs outside the allowed set and rejects permitted internal fact IDs when
+   they appear in the displayed message. It retries once and then returns a
+   fixed safe fallback if the output still violates those checks. Successful
+   questions, responses, violations, shares, decisions, and time changes are
+   recorded as audit events.
+7. Decisions are free text plus a scenario-defined category and optional
+   confidence. Scoring is performed by deterministic code over the event log,
+   not by the LLM. Detailed evaluation is unavailable until the session has
+   been completed.
+
+For the included ransomware scenario, the authored visibility schedule is:
+
+| Simulated role | Facts learned directly from the timeline |
+| --- | --- |
+| SOC analyst | Ransomware activity at T+5, failed admin logins at T+10, suspected account compromise at T+25, and the exfiltration assessment and outbound-traffic observation at T+45. Track Alpha adds confirmed exfiltration at T+80. Track Bravo instead identifies the traffic as approved backup activity at T+55. |
+| CISO | Suspected account compromise and ransomware activity at T+40. |
+| DPO | No direct timeline grants; learns facts only when another role explicitly shares them. |
+| CEO | No direct timeline grants; learns facts only when another role explicitly shares them. |
+
+The schedule controls a persona's derived knowledge and LLM context. It does not
+prevent the facilitator UI from retrieving each persona's knowledge, as described
+below.
+
+### What is restricted
+
+| Information or action | Current restriction |
+| --- | --- |
+| Variant ground truth | Remains in the backend's scenario object and is excluded from public response models and LLM requests. It is still visible to operators who can read the scenario files, container, or host filesystem. |
+| Future facts | Do not enter role knowledge until their timeline event fires. They are not sent to the LLM, although an operator with filesystem access can read the authored scenario. |
+| Another role's unshared facts | Excluded when generating a response for the target role. A fact enters another role's knowledge only through an explicit share or a timeline grant. |
+| Fact sharing | The backend verifies that the declared sending role knows the fact and that both role and fact IDs exist. |
+| LLM output | Must match the structured response schema. Referenced fact IDs are checked against the role's allowed set; violations cause one retry and then a safe fallback. |
+| Evaluation | The endpoint returns a conflict response until the session is completed. The UI also withholds the score during an active exercise. |
+| Session mutation | Start, advance, ask, share, decide, and complete operations are constrained by session state and validated request schemas. Completed sessions reject further exercise commands. |
+| Database access | PostgreSQL is available to the backend on the Compose network and is not published as a host port by the supplied Compose file. |
+| Scenario modification | The authoring and source endpoints validate complete updates, write them atomically, and reload the in-memory registry. The scenario directory is mounted read-write in Docker. |
+| AI model configuration | Ollama models are discovered through the backend. A saved provider/model pair is written atomically to `.llm-config/.env` and replaces the in-memory provider. The UI prevents exercise launch while no model is configured. |
+| OpenAI retention request | The OpenAI adapter requests `store=False`. The selected provider still receives the role prompt, permitted facts, and trainee question and remains subject to that provider's processing and logging controls. |
+
+These are simulation and application-state boundaries. They are not user or
+tenant authorization boundaries.
+
+### Current trust model and access limitations
+
+This POC assumes a trusted facilitator or a trusted single-user environment. It
+does **not** implement login, user accounts, session ownership, participant-role
+assignment, API keys, or role-based access control. A role such as `soc` or
+`ciso` is a persona supplied in a request, not the identity of the caller.
+
+Consequences of the current design include:
+
+- Any client that can reach the API can create sessions. Anyone who obtains a
+  session UUID can read that session, advance or complete it, ask any role a
+  question, record a decision as any role, or initiate a valid fact share.
+- Any client that can reach the authoring API can read scenario ground truth and
+  submit validated changes to the scenario files. There is no separate author
+  identity or permission check.
+- Any client that can reach the model-settings API can discover Ollama models
+  and change the provider/model used for subsequent prompts. Keep this
+  administrative surface on a trusted network.
+- `GET /sessions/{id}/roles/{role_id}/knowledge` has no caller authorization.
+  The frontend intentionally fetches every role's knowledge so it can populate
+  the facilitator's sharing controls. This means role-specific knowledge is
+  isolated from the role-response LLM context, but not from the human using the
+  browser or from a direct API client.
+- `GET /sessions/{id}/events` returns the complete event objects and payloads.
+  Those payloads can contain trainee questions, role responses, decisions,
+  rationales, fact IDs, and LLM-policy violation details. The UI shows only a
+  summary, but hiding fields in the UI is not an access control.
+- The evaluation time gate is state-based, not identity-based. Any API caller
+  able to complete a session can then retrieve its detailed evaluation.
+- CORS allows browser cross-origin calls from `http://localhost:3000`, but CORS
+  is not authentication and does not stop non-browser clients. In Compose, the
+  backend is also published directly on host port `8000`, including its OpenAPI
+  documentation, while the frontend is published on port `3000`.
+- The supplied HTTP services have no TLS termination. Network confidentiality
+  must be provided by the deployment environment or a reverse proxy.
+- The event history is append-only through the application repository and there
+  are no update/delete API routes, but it is not cryptographically tamper-evident.
+  A database administrator can alter records. Free-text questions, answers,
+  decisions, and rationales persist in the database volume.
+- LLM validation checks declared fact references and exposure of permitted
+  internal IDs; it does not detect an arbitrary unknown ID appearing only in
+  prose or prove that every natural-language claim is semantically supported by
+  the permitted facts. Prompt instructions, structured references, retry, and
+  fallback reduce leakage risk but are not a complete information-flow security
+  mechanism.
+- Secrets such as `OPENAI_API_KEY` are passed only to the backend, not embedded
+  in the browser bundle. They are still plain environment variables visible to
+  users or processes with sufficient Docker/host access. The example database
+  credentials are development defaults and should not be used in production.
+
+For multi-user or untrusted deployment, put the services behind TLS, stop
+publishing the backend directly, add authentication and per-session membership,
+authorize every read and mutation against the caller's assigned role, separate
+facilitator-only event/evaluation APIs from participant APIs, return only the
+caller's knowledge, protect secrets with the deployment's secret manager, and
+define retention/redaction controls for audit payloads. The semantic validation
+of LLM answers should also be strengthened if role separation is a security
+requirement rather than a training-game rule.
+
 ## Run with Docker
 
-The default provider is deterministic and requires no model or API key:
+Start the application without a preselected model:
 
 ```bash
 docker compose up --build
@@ -122,23 +268,36 @@ The browser calls the frontend's same-origin `/api` path. Next.js proxies those
 requests to the backend service, so the browser does not call port 8000 directly
 and does not depend on cross-origin access.
 
-### Ollama
-
-Create or update `.env`:
+For Ollama, copy `.env.example` to `.env` and set the URL of the Ollama server:
 
 ```env
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=
-OLLAMA_MODEL=gpt-oss:120b
+OLLAMA_BASE_URL=http://your-ollama-host:11434
+OLLAMA_DISCOVERY_TIMEOUT_SECONDS=10
 OLLAMA_TIMEOUT_SECONDS=300
 ```
 
-The URL must include `http://` and both slashes. Rebuild/recreate the backend
-after changing provider environment variables:
+Open **AI model configuration** on the setup page. Choosing Ollama automatically
+discovers its installed models. Save one before starting an exercise. The active
+provider and model are applied immediately and written to `.llm-config/.env`, which
+is host-mounted into the backend and survives container restarts. The file is
+runtime state and is intentionally excluded from Git.
 
-```bash
-docker compose up -d --build backend
-```
+No provider or model is selected by default. Until a model is saved, the setup
+page displays a warning, disables **Start exercise**, and the backend rejects new
+sessions and role prompts with a configuration error. Ollama is the first provider
+exposed through this UI; the existing OpenAI adapter remains available for future
+configuration support.
+
+The Ollama adapter calls the native `/api/chat` endpoint with a JSON schema for
+each structured contract (`RoleResponse`, investigation interpretation, and
+assessment interpretation). Responses still go through the same knowledge-boundary
+validation, retry, safe fallback, and audit logging as the other providers. The
+exercise UI uses `/sessions/{id}/ask/stream`: Ollama's structured response arrives
+through its streaming transport, is buffered until the evidence-boundary checks
+pass, and is then released as newline-delimited JSON chunks. This keeps unsafe
+output from reaching the browser while still providing a warmup cursor and
+progressive Markdown rendering. The cursor is removed when the final completion
+event arrives.
 
 The configured model must support the structured JSON responses used for role
 responses, investigation routing, and assessment normalization.
@@ -295,7 +454,7 @@ Each scenario directory has nine canonical files:
 
 ```text
 scenario.yaml            metadata, duration, and decision categories
-roles.yaml               role responsibilities and communication style
+roles.yaml               role responsibilities, personality, and communication style
 external_entities.yaml   external recipients and accepted communication types
 evidence.yaml            observation and finding definitions
 hypotheses.yaml          public propositions available for assessments
@@ -350,6 +509,11 @@ DATABASE_URL=postgresql+psycopg://trainer:trainer@localhost:5432/trainer \
 
 Sprint 1 uses the existing append-only event table, so it does not require a new
 database migration.
+
+Each role personality combines a compact Big Five trait profile with concrete
+behavioral tendencies and an under-pressure response. Personality affects how a
+role communicates and frames its permitted knowledge; it cannot add facts,
+change confidence, expand authority, or override the knowledge boundary.
 
 ## Tests
 

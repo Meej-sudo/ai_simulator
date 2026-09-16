@@ -20,6 +20,10 @@ def test_compiles_sprint_one_concepts_and_deterministic_variants():
     compiler = ScenarioCompiler()
     compiled = compiler.compile(SCENARIO)
 
+    assert compiled.scenario.id == "ransomware_001"
+    assert {role.id for role in compiled.roles} == {"soc", "ciso", "dpo", "ceo"}
+    assert compiled.role("soc").personality.traits.openness == "high"
+    assert compiled.role("ceo").personality.traits.extraversion == "high"
     assert {item.id for item in compiled.observations} == {
         "O001", "O002", "O003", "O004", "O005"
     }
@@ -129,4 +133,19 @@ def test_rejects_duplicate_external_entity_identifiers(tmp_path: Path, field: st
     path.write_text(yaml.safe_dump(document, sort_keys=False))
 
     with pytest.raises(ScenarioValidationError, match=message):
+        ScenarioCompiler().compile(scenario)
+
+
+def test_rejects_invalid_personality_trait(tmp_path: Path):
+    scenario = tmp_path / "scenario"
+    copytree(SCENARIO, scenario)
+    roles = scenario / "roles.yaml"
+    roles.write_text(
+        roles.read_text(encoding="utf-8").replace(
+            "openness: high", "openness: extreme", 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ScenarioValidationError, match="literal_error"):
         ScenarioCompiler().compile(scenario)

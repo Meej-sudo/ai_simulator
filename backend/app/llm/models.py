@@ -8,6 +8,7 @@ from app.domain.scenarios.models import (
     FindingDefinition,
     HypothesisDefinition,
     ObservationDefinition,
+    PersonalityProfile,
 )
 
 
@@ -26,6 +27,7 @@ class RoleResponseRequest(BaseModel):
     role_display_name: str
     responsibilities: list[str]
     communication_style: CommunicationStyle
+    personality: PersonalityProfile
     response_guidance: str | None = None
     simulation_time: int
     permitted_observations: list[ObservationDefinition]

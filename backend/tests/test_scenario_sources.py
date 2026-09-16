@@ -151,6 +151,10 @@ def test_authoring_api_round_trips_sprint_one_form_document_to_yaml(tmp_path: Pa
         document["variants"][0]["investigation_outcomes"][0]["reveal_findings"] = [
             "FD002"
         ]
+        document["roles"][0]["responsibilities"].append("preserve evidence")
+        document["roles"][0]["personality"]["summary"] = (
+            "Methodical investigator who preserves evidence."
+        )
 
         saved = client.put(
             "/scenarios/ransomware_001/authoring",
@@ -159,10 +163,17 @@ def test_authoring_api_round_trips_sprint_one_form_document_to_yaml(tmp_path: Pa
 
     assert saved.status_code == 200
     assert saved.json()["scenario"]["name"] == "Form-edited ransomware exercise"
+    assert "preserve evidence" in saved.json()["document"]["roles"][0][
+        "responsibilities"
+    ]
+    assert saved.json()["document"]["roles"][0]["personality"]["summary"] == (
+        "Methodical investigator who preserves evidence."
+    )
     files = registry.source_files("ransomware_001")
     assert "Revised ambiguous signal" in files["evidence.yaml"]
     assert "trace authentication" in files["investigations.yaml"]
     assert "FD002" in files["variants.yaml"]
+    assert "Methodical investigator who preserves evidence." in files["roles.yaml"]
 
 
 def test_authoring_api_rejects_broken_cross_references(tmp_path: Path):

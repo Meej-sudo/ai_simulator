@@ -63,11 +63,27 @@ class CommunicationStyle(StrictModel):
     verbosity: Literal["low", "medium", "high"] = "medium"
 
 
+class PersonalityTraits(StrictModel):
+    openness: Literal["low", "medium", "high"]
+    conscientiousness: Literal["low", "medium", "high"]
+    extraversion: Literal["low", "medium", "high"]
+    agreeableness: Literal["low", "medium", "high"]
+    emotional_stability: Literal["low", "medium", "high"]
+
+
+class PersonalityProfile(StrictModel):
+    summary: str = Field(min_length=1, max_length=500)
+    traits: PersonalityTraits
+    behavioral_tendencies: list[str] = Field(min_length=1, max_length=6)
+    under_pressure: str = Field(min_length=1, max_length=500)
+
+
 class RoleDefinition(StrictModel):
     id: str
     display_name: str
     responsibilities: list[str] = Field(min_length=1)
     communication_style: CommunicationStyle
+    personality: PersonalityProfile
     response_guidance: str | None = None
 
 
