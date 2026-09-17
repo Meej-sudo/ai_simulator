@@ -4,6 +4,11 @@
 **Companion to:** `BUG_REPORT.md` (fixes first; these are UX/product/engineering improvements observed during the same QA pass).
 **Update (full playthroughs):** see `GAMEPLAY_REVIEW.md` for IMP-A…IMP-G from two complete runs (Alpha 100/100, Bravo 0/100). IMP-A (visible sharing) and IMP-D (end-of-time state) are the highest-leverage additions; IMP-1 below is superseded by IMP-B in the review.
 
+**Status after the fix branch (`fix/qa-bugs-and-improvements`, 2026-09-17):**
+All BUG-1…BUG-17 from the QA passes are fixed and the bug-report/review documents were removed once resolved.
+Implemented from this list: **IMP-1** (suggestion chips on rejected work requests), **IMP-2** (Share-with control on evidence cards; hover "not yet shared with" still open), **IMP-4** (per-rule debrief on the close screen), **IMP-5** partially (stream errors now surface; optimistic question echo and a typing indicator are still open), and review items **IMP-A/B/C/D/E/F**.
+Still open: **IMP-3** (timeline strip / replay), **IMP-6** (decision confirm/undo), **IMP-7** (editor lint for placeholder/dangling content), **IMP-8** (engineering hygiene), **IMP-G** (coordinator onboarding panel).
+
 ---
 
 ## IMP-1 — Surface *available* investigations to the trainee
