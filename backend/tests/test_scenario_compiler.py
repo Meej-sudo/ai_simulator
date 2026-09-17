@@ -50,7 +50,7 @@ def test_compiles_v2_bundle_catalog_references_and_deterministic_variants():
         "I001", "I002", "I003", "I004", "I005", "I006", "I007"
     }
     assert {item.id for item in compiled.roles} == {
-        "soc", "ciso", "dpo", "ceo", "role_5"
+        "soc", "ciso", "dpo", "ceo"
     }
     assert {entity.id for entity in compiled.external_entities} == {
         "slovenian_dpa", "police", "press"
@@ -75,7 +75,7 @@ def test_v2_serialization_round_trips_without_domain_changes():
     variants = scenario_compiler.serialize_variants(original)
 
     assert definition["participants"]["roles"] == [
-        "soc", "ciso", "dpo", "ceo", "role_5"
+        "soc", "ciso", "dpo", "ceo"
     ]
     assert "events" in definition
     assert "timeline" not in definition
