@@ -324,3 +324,108 @@ def test_bridge_message_endpoint_supports_external_trainee(tmp_path: Path):
                 item["id"]
                 for item in [*knowledge["observations"], *knowledge["findings"]]
             }
+
+
+def test_sessions_can_be_listed(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        assert client.get("/sessions").json() == []
+        created = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()
+        listed = client.get("/sessions")
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()] == [created["id"]]
+        assert listed.json()[0]["status"] == "created"
+
+
+def test_session_completes_automatically_at_the_time_limit(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        advanced = client.post(
+            f"/sessions/{session_id}/advance-time", json={"minutes": 180}
+        )
+        assert advanced.status_code == 200
+        assert advanced.json()["status"] == "completed"
+        assert advanced.json()["simulation_time"] == 180
+        # Evaluation unlocks immediately after the time limit completes it.
+        assert client.get(f"/sessions/{session_id}/evaluation").status_code == 200
+        # Completing again is idempotent.
+        assert client.post(f"/sessions/{session_id}/complete").status_code == 200
+        # Advancing a completed session is rejected.
+        assert (
+            client.post(
+                f"/sessions/{session_id}/advance-time", json={"minutes": 5}
+            ).status_code
+            == 409
+        )
+
+
+def test_investigation_rejection_explains_performer_mismatch(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 10})
+        rejected = client.post(
+            f"/sessions/{session_id}/investigations",
+            json={
+                "requester_role": "soc",
+                "performer_role": "ceo",
+                "request": "Determine where the login source ip came from",
+            },
+        )
+        assert rejected.status_code == 200
+        body = rejected.json()
+        assert body["accepted"] is False
+        assert "cannot perform any investigation" in body["reason"]
+        assert body["suggestions"] == []
+
+
+def test_investigation_rejection_lists_eligible_suggestions(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 10})
+        rejected = client.post(
+            f"/sessions/{session_id}/investigations",
+            json={
+                "requester_role": "soc",
+                "performer_role": "soc",
+                "request": "zzzz unrelated gibberish qqqq",
+            },
+        )
+        body = rejected.json()
+        assert body["accepted"] is False
+        assert {item["id"] for item in body["suggestions"]} >= {"I001", "I002"}
+
+
+def test_confirmed_assessment_without_confirming_evidence_warns(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 45})
+        response = client.post(
+            f"/sessions/{session_id}/assessments",
+            json={
+                "actor_role": "soc",
+                "statement": "Data exfiltration is confirmed based on O004.",
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["recorded"][0]["confidence"] == "confirmed"
+        assert len(body["warnings"]) == 1
+        assert "confirmed" in body["warnings"][0]

@@ -84,6 +84,7 @@ class InvestigationRequestResult(BaseModel):
     accepted: bool
     reason: str
     investigation: InvestigationRun | None = None
+    suggestions: list[dict[str, str]] = []
 
 
 class AssessmentProjection(BaseModel):

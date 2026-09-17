@@ -59,6 +59,13 @@ class SessionRepository:
     def get(self, session_id: str) -> SessionRecord | None:
         return self.db.get(SessionRecord, session_id)
 
+    def list_all(self) -> list[SessionRecord]:
+        return list(
+            self.db.scalars(
+                select(SessionRecord).order_by(SessionRecord.created_at.desc())
+            )
+        )
+
     def append_event(
         self,
         session_id: str,

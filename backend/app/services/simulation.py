@@ -2,7 +2,12 @@ from sqlalchemy.orm import Session
 
 from app.domain.evaluation.engine import EvaluationEngine, EvaluationResult
 from app.domain.knowledge.engine import KnowledgeEngine, RoleKnowledge
-from app.domain.scenarios.models import CONFIDENCE_SEMANTICS, Confidence, RuntimeScenario
+from app.domain.scenarios.models import (
+    CONFIDENCE_SEMANTICS,
+    Confidence,
+    Reliability,
+    RuntimeScenario,
+)
 from app.domain.simulation.models import (
     AssessmentProjection,
     AssessmentSnapshot,
@@ -70,6 +75,9 @@ class SimulationService:
             raise NotFoundError(f"session not found: {session_id}")
         return session
 
+    def list_sessions(self) -> list[SessionRecord]:
+        return self.repo.list_all()
+
     def start(self, session_id: str) -> SessionRecord:
         session = self.get_session(session_id)
         if session.status != SessionStatus.CREATED:
@@ -129,11 +137,23 @@ class SimulationService:
             EventType.TIME_ADVANCED,
             payload={"from_minute": old_time, "to_minute": new_time, "minutes": minutes},
         )
+        if new_time >= scenario.scenario.duration_minutes:
+            session.status = SessionStatus.COMPLETED
+            self.repo.append_event(
+                session.id,
+                new_time,
+                EventType.SESSION_COMPLETED,
+                payload={"reason": "time_limit"},
+            )
         self.repo.commit()
         return session
 
     def complete(self, session_id: str) -> SessionRecord:
-        session = self._running_session(session_id)
+        session = self.get_session(session_id)
+        if session.status == SessionStatus.COMPLETED:
+            return session
+        if session.status != SessionStatus.RUNNING:
+            raise InvalidOperationError("session must be running")
         session.status = SessionStatus.COMPLETED
         self.repo.append_event(
             session.id, session.simulation_time, EventType.SESSION_COMPLETED
@@ -434,7 +454,9 @@ class SimulationService:
         )
         interpretation = validated.response
         if not interpretation.matched or interpretation.investigation_id is None:
-            reason = "The request did not match a currently available investigation."
+            reason = self._no_investigation_reason(
+                session, scenario, performer_role, eligible
+            )
             self.repo.append_event(
                 session.id,
                 session.simulation_time,
@@ -444,7 +466,13 @@ class SimulationService:
                 payload={"request": request_text, "reason": reason},
             )
             self.repo.commit()
-            return InvestigationRequestResult(accepted=False, reason=reason)
+            return InvestigationRequestResult(
+                accepted=False,
+                reason=reason,
+                suggestions=[
+                    {"id": item.id, "label": item.label} for item in eligible
+                ],
+            )
 
         eligible_by_id = {item.id: item for item in eligible}
         investigation = eligible_by_id.get(interpretation.investigation_id)
@@ -615,6 +643,34 @@ class SimulationService:
         self.repo.commit()
         return recorded
 
+    def assessment_warnings(
+        self,
+        session_id: str,
+        actor_role: str,
+        recorded: list[AssessmentSnapshot],
+    ) -> list[str]:
+        # Non-blocking feedback: flag "confirmed" assessments that no
+        # confirmed-reliability evidence supports. The mistake stays the lesson;
+        # the trainee just learns about it now instead of at scoring time.
+        session = self.get_session(session_id)
+        knowledge = self.role_knowledge(session.id, actor_role)
+        confirming = {
+            item.id
+            for item in (*knowledge.observations, *knowledge.findings)
+            if item.reliability == Reliability.CONFIRMED
+        }
+        warnings: list[str] = []
+        for snapshot in recorded:
+            if snapshot.confidence == Confidence.CONFIRMED and not (
+                set(snapshot.basis_evidence_ids) & confirming
+            ):
+                warnings.append(
+                    f"{snapshot.hypothesis_label} was recorded as confirmed, but "
+                    "no confirmed-reliability evidence supports that confidence "
+                    "level yet."
+                )
+        return warnings
+
     def assessments(self, session_id: str) -> AssessmentProjection:
         session = self.get_session(session_id)
         scenario = self._runtime_scenario(session)
@@ -742,6 +798,73 @@ class SimulationService:
         except StopIteration as exc:
             raise NotFoundError(f"role not found: {role_id}") from exc
 
+    def _no_investigation_reason(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        performer_role: str,
+        eligible,
+    ) -> str:
+        # Explain *why* nothing matched instead of returning one generic string.
+        performable = [
+            item
+            for item in scenario.investigations
+            if performer_role in item.performer_roles
+        ]
+        if not performable:
+            return (
+                f"{performer_role} cannot perform any investigation. "
+                "Assign the request to a role that can."
+            )
+        if eligible:
+            return (
+                "The request did not match a currently available investigation. "
+                "Try describing the evidence question more directly."
+            )
+        known = self.role_knowledge(session.id, performer_role).evidence_ids
+        started_ids = {
+            event.payload.get("investigation_id")
+            for event in self.repo.events(session.id)
+            if event.event_type == EventType.INVESTIGATION_STARTED
+        }
+        missing_evidence: set[str] = set()
+        blocked_by_prerequisites = False
+        for item in performable:
+            if not item.repeatable and item.id in started_ids:
+                continue
+            prerequisites = item.prerequisites
+            missing = set(prerequisites.all_evidence) - known
+            any_missing = bool(prerequisites.any_evidence) and not (
+                set(prerequisites.any_evidence) & known
+            )
+            if missing or any_missing:
+                blocked_by_prerequisites = True
+                missing_evidence |= missing
+                if any_missing:
+                    missing_evidence |= set(prerequisites.any_evidence) - known
+                continue
+            if (
+                session.simulation_time + item.duration_minutes
+                > scenario.scenario.duration_minutes
+            ):
+                return (
+                    "There is not enough exercise time left to complete any "
+                    "remaining investigation."
+                )
+        if blocked_by_prerequisites:
+            return (
+                "No investigation is available yet: more evidence is needed first"
+                + (
+                    " (missing "
+                    + ", ".join(sorted(missing_evidence))
+                    + ")"
+                    if missing_evidence
+                    else ""
+                )
+                + ". Ask this role what they know or complete another investigation."
+            )
+        return "All investigations for this role are already completed."
+
     def _eligible_investigations(
         self,
         session: SessionRecord,
@@ -789,6 +912,8 @@ class SimulationService:
             target_role=run.performer_role,
             payload={
                 "investigation_id": run.investigation_id,
+                "label": run.label,
+                "request": run.request,
                 "started_event_id": run.id,
                 "started_at": run.started_at,
                 "due_at": run.due_at,

@@ -274,6 +274,11 @@ def create_session(
     return call(lambda: service.create_session(body.scenario_id, body.variant_id, body.seed))
 
 
+@router.get("/sessions", response_model=list[SessionResponse])
+def list_sessions(service: SimulationService = Depends(get_service)):
+    return call(service.list_sessions)
+
+
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 def get_session(session_id: str, service: SimulationService = Depends(get_service)):
     return call(lambda: service.get_session(session_id))
@@ -430,9 +435,17 @@ async def ask_role_stream(
 
         # Provider output is held until fact-boundary validation succeeds, then
         # released in readable Markdown chunks so unsafe output is never leaked.
-        for chunk in markdown_chunks(response.message):
-            yield stream_event("delta", content=chunk)
-            await asyncio.sleep(0.018)
+        try:
+            for chunk in markdown_chunks(response.message):
+                yield stream_event("delta", content=chunk)
+                await asyncio.sleep(0.018)
+        except Exception as exc:  # noqa: BLE001 - stream must end with a typed error
+            yield stream_event(
+                "error",
+                detail=f"The reply was interrupted: {exc}",
+                status=502,
+            )
+            return
 
         yield stream_event(
             "complete",
@@ -544,6 +557,9 @@ async def record_assessment(
             body.statement,
         )
     )
+    warnings = call(
+        lambda: service.assessment_warnings(session_id, body.actor_role, recorded)
+    )
     return AssessmentSubmissionResponse(
         recorded=recorded,
         message=(
@@ -551,6 +567,7 @@ async def record_assessment(
             if recorded
             else "No scenario hypothesis could be identified; the assessment was not recorded."
         ),
+        warnings=warnings,
     )
 
 

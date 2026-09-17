@@ -97,6 +97,7 @@ class InvestigationRequestResponse(BaseModel):
     accepted: bool
     reason: str
     investigation: InvestigationRun | None = None
+    suggestions: list[dict[str, str]] = []
 
 
 class AssessmentRequest(BaseModel):
@@ -107,6 +108,7 @@ class AssessmentRequest(BaseModel):
 class AssessmentSubmissionResponse(BaseModel):
     recorded: list[AssessmentSnapshot]
     message: str
+    warnings: list[str] = []
 
 
 class DecisionRequest(BaseModel):
