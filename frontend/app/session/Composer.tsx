@@ -15,6 +15,7 @@ type Props = {
   evidence: Evidence[];
   categories: DecisionCategory[];
   busy: boolean;
+  suggestions: { id: string; label: string }[];
   onMessage: (text: string, citedEvidenceIds: string[]) => Promise<boolean>;
   onInvestigate: (
     requesterRole: string,
@@ -44,6 +45,7 @@ export default function Composer({
   evidence,
   categories,
   busy,
+  suggestions,
   onMessage,
   onInvestigate,
   onAssess,
@@ -191,6 +193,22 @@ export default function Composer({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {mode === "investigate" && suggestions.length > 0 && (
+        <div className="composer-suggestions" aria-label="Available investigations">
+          <span>Available work:</span>
+          {suggestions.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setText(item.label)}
+              title={item.label}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
 

@@ -20,6 +20,7 @@ export default function TopBar({
   const variant =
     scenario.variants.find((item) => item.id === session.variant_id)?.name ??
     session.variant_id;
+  const timeExpired = session.simulation_time >= scenario.duration_minutes;
 
   return (
     <header className="room-topbar">
@@ -31,8 +32,13 @@ export default function TopBar({
         <em>T+</em> {String(session.simulation_time).padStart(3, "0")} <em>min</em>
       </div>
       <div className="room-advance" aria-label="Advance simulation time">
-        <button disabled={busy} onClick={() => onAdvance(5)}>+5</button>
-        <button disabled={busy} onClick={() => onAdvance(15)}>+15</button>
+        <button disabled={busy || timeExpired} onClick={() => onAdvance(5)}>+5</button>
+        <button disabled={busy || timeExpired} onClick={() => onAdvance(15)}>+15</button>
+        {timeExpired && (
+          <span className="room-time-expired">
+            Time limit reached — End exercise to see your result
+          </span>
+        )}
       </div>
       <div className="room-spacer" />
       <div className="trainee-identity">

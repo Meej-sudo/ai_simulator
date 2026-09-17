@@ -95,9 +95,21 @@ export type AuditEvent = {
   payload: Record<string, unknown>;
 };
 
+export type EvaluationRule = {
+  rule_id: string;
+  description: string;
+  possible_points: number;
+  awarded_points: number;
+  expected_action: string;
+  expected_by_minute: number | null;
+  actual_action: string | null;
+  actual_minute: number | null;
+};
+
 export type Evaluation = {
   total_score: number;
   possible_score: number;
+  rules: EvaluationRule[];
 };
 
 export type Completion = {
@@ -106,6 +118,7 @@ export type Completion = {
   endedAtMinute: number;
   totalScore: number;
   possibleScore: number;
+  rules: EvaluationRule[];
 };
 
 export type ComposerMode = "message" | "investigate" | "assess" | "decide";

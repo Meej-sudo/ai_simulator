@@ -13,6 +13,8 @@ type Props = {
   roles: Role[];
   investigations: InvestigationRun[];
   assessments: AssessmentProjection;
+  busy: boolean;
+  onShare: (fromRole: string, toRole: string, evidenceId: string) => Promise<boolean>;
 };
 
 export default function ContextRail({
@@ -20,6 +22,8 @@ export default function ContextRail({
   roles,
   investigations,
   assessments,
+  busy,
+  onShare,
 }: Props) {
   const inFlight = investigations.filter((item) => item.status === "in_progress");
 
@@ -34,19 +38,47 @@ export default function ContextRail({
           <p className="context-empty">No evidence discovered yet.</p>
         ) : (
           <div className="context-list">
-            {evidence.map((item) => (
-              <article className="evidence-card" key={item.id}>
-                <div>
-                  <b>{item.id}</b>
-                  <span>{item.kind}</span>
-                </div>
-                <p>{item.statement}</p>
-                <small>
-                  {item.reliability} · held by{" "}
-                  {(item.holders ?? []).map((id) => roleName(roles, id)).join(", ")}
-                </small>
-              </article>
-            ))}
+            {evidence.map((item) => {
+              const holders = item.holders ?? [];
+              const receivers = roles.filter((role) => !holders.includes(role.id));
+              return (
+                <article className="evidence-card" key={item.id}>
+                  <div>
+                    <b>{item.id}</b>
+                    <span>{item.kind}</span>
+                  </div>
+                  <p>{item.statement}</p>
+                  <small>
+                    {item.reliability} · held by{" "}
+                    {holders.map((id) => roleName(roles, id)).join(", ") || "no role"}
+                  </small>
+                  {holders.length > 0 && receivers.length > 0 && (
+                    <label className="evidence-share">
+                      Share with
+                      <select
+                        defaultValue=""
+                        disabled={busy}
+                        onChange={(event) => {
+                          const to = event.target.value;
+                          if (!to) return;
+                          void onShare(holders[0], to, item.id);
+                          event.target.value = "";
+                        }}
+                      >
+                        <option value="" disabled>
+                          Choose a role…
+                        </option>
+                        {receivers.map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
       </section>

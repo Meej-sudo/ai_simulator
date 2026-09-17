@@ -192,6 +192,8 @@ export default function Conversation({
         return (
           (event.event_type === "QUESTION_ASKED" && event.target_role === roleId) ||
           (event.event_type === "ROLE_RESPONDED" && event.actor_role === roleId) ||
+          (event.event_type === "EVIDENCE_SHARED" &&
+            event.target_role === roleId) ||
           (event.event_type === "MESSAGE_POSTED" &&
             event.payload.thread_id === activeThread)
         );
@@ -252,6 +254,16 @@ export default function Conversation({
           ) {
             return <StructuredEvent event={event} roles={roles} key={event.id} />;
           }
+          if (event.event_type === "EVIDENCE_SHARED") {
+            return (
+              <div className="system-message" key={event.id}>
+                <span />
+                <time>T+{event.simulation_time}</time>
+                Evidence shared with {roleName(roles, event.target_role)}
+                <span />
+              </div>
+            );
+          }
           if (event.event_type === "QUESTION_ASKED") {
             return (
               <Message
@@ -294,7 +306,7 @@ export default function Conversation({
           );
         })}
 
-        {streamingRole === roleId && (
+        {streamingRole !== "" && streamingRole === roleId && (
           <Message
             mine={false}
             name={role?.display_name ?? roleId}

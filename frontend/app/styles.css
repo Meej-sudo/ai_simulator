@@ -128,6 +128,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .completion-notice strong { font: 500 22px Georgia, serif; }
 .completion-notice p { margin: 0; }
 .completion-notice small { color: var(--muted); overflow-wrap: anywhere; }
+.debrief-list { display: grid; gap: 8px; margin: 4px 0 0; padding: 0; list-style: none; }
+.debrief-list li { padding: 8px 10px; border-left: 3px solid var(--line); background: #0c1613; }
+.debrief-list b { display: block; font-size: 12px; }
+.debrief-list span { color: var(--muted); font-size: 11px; }
+.debrief-hit { border-left-color: var(--green); }
+.debrief-partial { border-left-color: var(--amber); }
+.debrief-miss { border-left-color: var(--red); }
 
 .grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 18px; }
 .command, .score, .log { padding: 26px; }
@@ -422,6 +429,12 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   text-transform: none;
 }
 .room-advance button:hover { border-color: var(--green); color: var(--green); }
+.room-time-expired {
+  align-self: center;
+  font-size: 12px;
+  color: var(--amber, #d9a441);
+  white-space: nowrap;
+}
 .room-spacer { flex: 1; }
 .trainee-identity { display: flex; align-items: center; gap: 9px; }
 .trainee-identity > span:last-child { display: grid; text-align: right; }
@@ -759,6 +772,30 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   background: rgba(101, 240, 165, .08);
   color: var(--green);
 }
+.composer-suggestions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-height: 54px;
+  overflow-x: auto;
+}
+.composer-suggestions > span {
+  padding-right: 2px;
+  color: #5f7069;
+  font: 500 9px "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+.composer-suggestions button {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 20px;
+  background: #0c1613;
+  color: #5f7069;
+  font: 500 9px "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .composer-entry { display: flex; align-items: flex-end; gap: 9px; }
 .composer-entry textarea {
   min-height: 46px;
@@ -836,6 +873,13 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   width: min(620px, calc(100% - 32px));
   transform: translateX(-50%);
   box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+}
+.room-notice {
+  padding: 12px 15px;
+  border: 1px solid var(--amber);
+  background: rgba(217, 164, 65, .1);
+  color: var(--amber);
+  font-size: 12px;
 }
 .room-loading {
   display: grid;

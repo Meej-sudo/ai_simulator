@@ -49,6 +49,7 @@ export default function SessionView({
         endedAtMinute: ended.simulation_time,
         totalScore: evaluation.total_score,
         possibleScore: evaluation.possible_score,
+        rules: evaluation.rules ?? [],
       });
     } finally {
       setEnding(false);
@@ -88,6 +89,11 @@ export default function SessionView({
           {state.error}
         </div>
       )}
+      {!state.error && state.notice && (
+        <div className="room-notice room-error-floating" role="status">
+          {state.notice}
+        </div>
+      )}
       <div className="room-panes">
         <ThreadRail
           activeThread={state.activeThread}
@@ -110,6 +116,7 @@ export default function SessionView({
             busy={state.busy}
             categories={scenario.decision_categories}
             evidence={discoveredEvidence}
+            suggestions={state.suggestions}
             onAssess={controller.recordAssessment}
             onDecide={controller.recordDecision}
             onInvestigate={controller.requestWork}
@@ -119,8 +126,10 @@ export default function SessionView({
         </main>
         <ContextRail
           assessments={state.assessments}
+          busy={state.busy}
           evidence={discoveredEvidence}
           investigations={state.investigations}
+          onShare={controller.shareEvidence}
           roles={state.roles}
         />
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { api, streamApi } from "../api";
 import type {
@@ -27,6 +27,8 @@ type State = {
   busy: boolean;
   loading: boolean;
   error: string;
+  notice: string;
+  suggestions: { id: string; label: string }[];
 };
 
 type Action =
@@ -43,7 +45,9 @@ type Action =
   | { type: "error"; message: string }
   | { type: "stream-start"; roleId: string }
   | { type: "stream-delta"; content: string }
-  | { type: "stream-end" };
+  | { type: "stream-end" }
+  | { type: "suggestions"; items: { id: string; label: string }[] }
+  | { type: "notice"; message: string };
 
 const initialState: State = {
   session: null,
@@ -59,6 +63,8 @@ const initialState: State = {
   busy: false,
   loading: true,
   error: "",
+  notice: "",
+  suggestions: [],
 };
 
 function reducer(state: State, action: Action): State {
@@ -67,14 +73,17 @@ function reducer(state: State, action: Action): State {
       return { ...state, loading: true, error: "" };
     case "loaded": {
       const maxSequence = action.payload.events.at(-1)?.sequence ?? 0;
-      const firstLoad = state.session === null;
       return {
         ...state,
         ...action.payload,
         loading: false,
-        lastSeen: firstLoad
-          ? { ...state.lastSeen, [state.activeThread]: maxSequence }
-          : state.lastSeen,
+        lastSeen: {
+          ...state.lastSeen,
+          [state.activeThread]: Math.max(
+            state.lastSeen[state.activeThread] ?? 0,
+            maxSequence,
+          ),
+        },
       };
     }
     case "thread":
@@ -84,15 +93,19 @@ function reducer(state: State, action: Action): State {
         lastSeen: { ...state.lastSeen, [action.threadId]: action.sequence },
       };
     case "busy":
-      return { ...state, busy: action.value };
+      return { ...state, busy: action.value, notice: action.value ? "" : state.notice };
     case "error":
-      return { ...state, error: action.message, loading: false };
+      return { ...state, error: action.message, loading: false, notice: "" };
     case "stream-start":
       return { ...state, streamingRole: action.roleId, streamingText: "" };
     case "stream-delta":
       return { ...state, streamingText: state.streamingText + action.content };
     case "stream-end":
       return { ...state, streamingRole: "", streamingText: "" };
+    case "suggestions":
+      return { ...state, suggestions: action.items };
+    case "notice":
+      return { ...state, notice: action.message };
     default:
       return state;
   }
@@ -100,6 +113,9 @@ function reducer(state: State, action: Action): State {
 
 export function useSession(sessionId: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const lastSequenceRef = useRef(0);
+  const busyRef = useRef(false);
+  busyRef.current = state.busy || state.streamingRole !== "";
 
   const refresh = useCallback(async () => {
     const [session, roles, events, investigations, assessments] = await Promise.all([
@@ -138,6 +154,7 @@ export function useSession(sessionId: string) {
         knowledge: Object.fromEntries(pairs),
       },
     });
+    lastSequenceRef.current = events.at(-1)?.sequence ?? 0;
   }, [sessionId]);
 
   useEffect(() => {
@@ -149,6 +166,26 @@ export function useSession(sessionId: string) {
       });
     });
   }, [refresh]);
+
+  // Live sync: cheaply detect events produced elsewhere (another tab, an
+  // instructor, or a completed investigation) and refresh the room when the
+  // event log grew. Skipped while a local action or stream is in flight.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (busyRef.current || document.hidden) return;
+      api<AuditEvent[]>(`/sessions/${sessionId}/events`)
+        .then((events) => {
+          const latest = events.at(-1)?.sequence ?? 0;
+          if (latest !== lastSequenceRef.current) {
+            lastSequenceRef.current = latest;
+            return refresh();
+          }
+          return undefined;
+        })
+        .catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [refresh, sessionId]);
 
   const run = useCallback(
     async (operation: () => Promise<void>): Promise<boolean> => {
@@ -211,6 +248,7 @@ export function useSession(sessionId: string) {
           const targetRole = state.activeThread.replace(/^dm:/, "");
           dispatch({ type: "stream-start", roleId: targetRole });
           try {
+            let completed = false;
             for await (const item of streamApi(
               `/sessions/${sessionId}/ask/stream`,
               {
@@ -224,9 +262,16 @@ export function useSession(sessionId: string) {
             )) {
               if (item.type === "delta") {
                 dispatch({ type: "stream-delta", content: item.content });
+              } else if (item.type === "complete") {
+                completed = true;
               } else if (item.type === "error") {
                 throw new Error(item.detail);
               }
+            }
+            if (!completed) {
+              throw new Error(
+                "The reply was interrupted before it finished. Please retry.",
+              );
             }
           } finally {
             dispatch({ type: "stream-end" });
@@ -237,21 +282,42 @@ export function useSession(sessionId: string) {
     [refresh, run, sessionId, state.activeThread],
   );
 
+  const shareEvidence = useCallback(
+    (fromRole: string, toRole: string, evidenceId: string) =>
+      run(async () => {
+        await api(`/sessions/${sessionId}/actions/share-evidence`, {
+          method: "POST",
+          body: JSON.stringify({
+            from_role: fromRole,
+            to_role: toRole,
+            evidence_id: evidenceId,
+          }),
+        });
+        await refresh();
+      }),
+    [refresh, run, sessionId],
+  );
+
   const requestWork = useCallback(
     (requesterRole: string, performerRole: string, request: string) =>
       run(async () => {
-        const result = await api<{ accepted: boolean; reason: string }>(
-          `/sessions/${sessionId}/investigations`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              requester_role: requesterRole,
-              performer_role: performerRole,
-              request,
-            }),
-          },
-        );
-        if (!result.accepted) throw new Error(result.reason);
+        dispatch({ type: "suggestions", items: [] });
+        const result = await api<{
+          accepted: boolean;
+          reason: string;
+          suggestions?: { id: string; label: string }[];
+        }>(`/sessions/${sessionId}/investigations`, {
+          method: "POST",
+          body: JSON.stringify({
+            requester_role: requesterRole,
+            performer_role: performerRole,
+            request,
+          }),
+        });
+        if (!result.accepted) {
+          dispatch({ type: "suggestions", items: result.suggestions ?? [] });
+          throw new Error(result.reason);
+        }
         await refresh();
       }),
     [refresh, run, sessionId],
@@ -260,13 +326,17 @@ export function useSession(sessionId: string) {
   const recordAssessment = useCallback(
     (actorRole: string, statement: string) =>
       run(async () => {
-        const result = await api<{ recorded: unknown[]; message: string }>(
-          `/sessions/${sessionId}/assessments`,
-          {
-            method: "POST",
-            body: JSON.stringify({ actor_role: actorRole, statement }),
-          },
-        );
+        const result = await api<{
+          recorded: unknown[];
+          message: string;
+          warnings?: string[];
+        }>(`/sessions/${sessionId}/assessments`, {
+          method: "POST",
+          body: JSON.stringify({ actor_role: actorRole, statement }),
+        });
+        if (result.warnings && result.warnings.length > 0) {
+          dispatch({ type: "notice", message: result.warnings.join(" ") });
+        }
         if (result.recorded.length === 0) throw new Error(result.message);
         await refresh();
       }),
@@ -321,6 +391,7 @@ export function useSession(sessionId: string) {
     advance,
     sendMessage,
     requestWork,
+    shareEvidence,
     recordAssessment,
     recordDecision,
     refresh,

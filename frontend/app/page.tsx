@@ -8,6 +8,8 @@ import { api } from "./api";
 import SessionView from "./session/SessionView";
 import type { Completion, Scenario, Session } from "./session/types";
 
+const ACTIVE_SESSION_KEY = "incident-room-active-session";
+
 export default function Home() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenarioId, setScenarioId] = useState("");
@@ -26,7 +28,7 @@ export default function Home() {
 
   useEffect(() => {
     api<Scenario[]>("/scenarios")
-      .then((items) => {
+      .then(async (items) => {
         setScenarios(items);
         const first = items[0];
         if (first) {
@@ -35,6 +37,24 @@ export default function Home() {
         }
         if (items.length === 0) {
           setError("No scenarios are available. Add a scenario before starting an exercise.");
+        }
+        // Rejoin an exercise that is still running after a page reload.
+        const savedId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
+        if (!savedId) return;
+        try {
+          const saved = await api<Session>(`/sessions/${savedId}`);
+          if (
+            saved.status === "running" &&
+            items.some((scenario) => scenario.id === saved.scenario_id)
+          ) {
+            setScenarioId(saved.scenario_id);
+            setVariantId(saved.variant_id);
+            setSessionId(saved.id);
+          } else {
+            window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+          }
+        } catch {
+          window.localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
       })
       .catch((cause) => {
@@ -59,6 +79,7 @@ export default function Home() {
       const started = await api<Session>(`/sessions/${created.id}/start`, {
         method: "POST",
       });
+      window.localStorage.setItem(ACTIVE_SESSION_KEY, started.id);
       setSessionId(started.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not start the exercise.");
@@ -80,6 +101,7 @@ export default function Home() {
     return (
       <SessionView
         onComplete={(result) => {
+          window.localStorage.removeItem(ACTIVE_SESSION_KEY);
           setCompletion(result);
           setSessionId("");
         }}
@@ -113,6 +135,41 @@ export default function Home() {
               Ended at T+{completion.endedAtMinute}. Final score{" "}
               {completion.totalScore}/{completion.possibleScore}.
             </p>
+            {completion.rules.length > 0 && (
+              <ul className="debrief-list">
+                {completion.rules.map((rule) => (
+                  <li
+                    className={
+                      rule.awarded_points >= rule.possible_points
+                        ? "debrief-hit"
+                        : rule.awarded_points > 0
+                          ? "debrief-partial"
+                          : "debrief-miss"
+                    }
+                    key={rule.rule_id}
+                  >
+                    <b>
+                      {rule.awarded_points}/{rule.possible_points} —{" "}
+                      {rule.description}
+                    </b>
+                    <span>
+                      Expected: {rule.expected_action}
+                      {rule.expected_by_minute !== null
+                        ? ` by T+${rule.expected_by_minute}`
+                        : ""}
+                      {" · "}
+                      {rule.actual_action
+                        ? `Actual: ${rule.actual_action}${
+                            rule.actual_minute !== null
+                              ? ` at T+${rule.actual_minute}`
+                              : ""
+                          }`
+                        : "No matching action recorded."}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <small>Audit reference {completion.sessionId}</small>
           </div>
         )}
