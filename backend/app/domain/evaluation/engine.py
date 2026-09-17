@@ -24,6 +24,11 @@ class EvaluationResult(BaseModel):
 
 
 class EvaluationEngine:
+    ACTION_LABELS = {
+        EventType.QUESTION_ASKED: "Contacted the role",
+        EventType.EVIDENCE_SHARED: "Shared the evidence",
+    }
+
     def evaluate(
         self, scenario: RuntimeScenario, events: list[EventSnapshot]
     ) -> EvaluationResult:
@@ -96,7 +101,11 @@ class EvaluationEngine:
             actual_action=(
                 str(actual.payload.get("decision"))
                 if actual and actual.event_type == EventType.DECISION_MADE
-                else actual.event_type.value if actual else None
+                else (
+                    self.ACTION_LABELS.get(actual.event_type, actual.event_type.value)
+                    if actual
+                    else None
+                )
             ),
             actual_minute=actual.simulation_time if actual else None,
             relevant_event_ids=[event.id for event in relevant],

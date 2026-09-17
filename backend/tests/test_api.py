@@ -365,6 +365,24 @@ def test_session_completes_automatically_at_the_time_limit(tmp_path: Path):
         )
 
 
+def test_advance_time_clamps_to_the_scenario_duration(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        client.post(f"/sessions/{session_id}/start")
+        client.post(f"/sessions/{session_id}/advance-time", json={"minutes": 170})
+        # An advance that would overshoot the duration clamps to the limit
+        # instead of erroring, and completes the session.
+        advanced = client.post(
+            f"/sessions/{session_id}/advance-time", json={"minutes": 15}
+        )
+        assert advanced.status_code == 200
+        assert advanced.json()["simulation_time"] == 180
+        assert advanced.json()["status"] == "completed"
+
+
 def test_investigation_rejection_explains_performer_mismatch(tmp_path: Path):
     with TestClient(make_app(tmp_path)) as client:
         session_id = client.post(

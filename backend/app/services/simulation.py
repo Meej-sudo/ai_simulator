@@ -99,11 +99,8 @@ class SimulationService:
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         old_time = session.simulation_time
-        new_time = old_time + minutes
-        if new_time > scenario.scenario.duration_minutes:
-            raise InvalidOperationError(
-                f"advance exceeds scenario duration ({scenario.scenario.duration_minutes} minutes)"
-            )
+        duration = scenario.scenario.duration_minutes
+        new_time = min(old_time + minutes, duration)
 
         due: list[tuple[int, int, object]] = [
             (item.at_minute, 0, item)
@@ -135,7 +132,11 @@ class SimulationService:
             session.id,
             new_time,
             EventType.TIME_ADVANCED,
-            payload={"from_minute": old_time, "to_minute": new_time, "minutes": minutes},
+            payload={
+                "from_minute": old_time,
+                "to_minute": new_time,
+                "minutes": new_time - old_time,
+            },
         )
         if new_time >= scenario.scenario.duration_minutes:
             session.status = SessionStatus.COMPLETED

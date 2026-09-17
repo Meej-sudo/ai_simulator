@@ -106,10 +106,11 @@ function StructuredEvent({
       type === "INVESTIGATION_COMPLETED"
         ? "Investigation completed"
         : "Investigation started";
-    body =
-      asString(event.payload.request) ||
-      asString(event.payload.investigation_id);
-    sub = `${actor} → ${target}`;
+    const label = asString(event.payload.label);
+    const request = asString(event.payload.request);
+    body = label || request || asString(event.payload.investigation_id);
+    const detail = label && request && request !== label ? request : "";
+    sub = [`${actor} → ${target}`, detail].filter(Boolean).join(" · ");
   }
 
   return (
@@ -194,6 +195,9 @@ export default function Conversation({
           (event.event_type === "ROLE_RESPONDED" && event.actor_role === roleId) ||
           (event.event_type === "EVIDENCE_SHARED" &&
             event.target_role === roleId) ||
+          (event.event_type === "INVESTIGATION_STARTED" ||
+            event.event_type === "INVESTIGATION_COMPLETED") &&
+            (event.actor_role === roleId || event.target_role === roleId) ||
           (event.event_type === "MESSAGE_POSTED" &&
             event.payload.thread_id === activeThread)
         );
