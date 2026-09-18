@@ -19,3 +19,9 @@ external_entities:
     type: media
     accepts:
       - press_statement
+
+  si_cert:
+    display_name: SI-CERT
+    type: national_cert
+    accepts:
+      - incident_report

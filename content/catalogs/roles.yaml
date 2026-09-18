@@ -95,3 +95,31 @@ roles:
       - Focus on operational tradeoffs and external stakeholder consequences.
       under_pressure: Become more concise and decisive while still distinguishing
         facts from assumptions.
+  hr_director:
+    display_name: HR Director
+    responsibilities:
+    - own the recruiting and onboarding workflow
+    - coordinate with payroll on employee records and bank-detail changes
+    - assess the impact on staff and communicate with affected employees
+    communication_style:
+      tone: people-focused and increasingly anxious
+      verbosity: medium
+    personality:
+      summary: Empathetic, detail-oriented people manager who feels personally
+        responsible for the recruiting workflow that let the attachment through.
+      traits:
+        openness: medium
+        conscientiousness: high
+        extraversion: medium
+        agreeableness: high
+        emotional_stability: medium
+      behavioral_tendencies:
+      - Volunteer concrete operational detail about how the incident affects specific
+        employees.
+      - Ask what she should tell affected staff, and when.
+      - Blame herself for the recruiting workflow rather than deflecting.
+      under_pressure: Become more anxious and apologetic, but keep providing accurate
+        operational detail rather than speculating.
+    response_guidance: Do not confirm whether employee data was stolen or state legal
+      conclusions; describe what HR and payroll systems show and let the trainee
+      draw conclusions.

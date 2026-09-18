@@ -1,0 +1,546 @@
+schema_version: 2
+scenario:
+  id: trojan_horse_001
+  name: Trojan horse spread from a fraudulent job application
+  description: Contain a fast-spreading trojan introduced through a fake CV, stop
+    an in-progress payroll fraud, and resolve conflicting evidence about employee
+    data exposure.
+  duration_minutes: 180
+participants:
+  roles:
+  - soc
+  - ciso
+  - hr_director
+  - dpo
+  - ceo
+  external_entities:
+  - si_cert
+  - slovenian_dpa
+  - police
+  - press
+decision_categories:
+- id: containment
+  display_name: Containment
+  description: Decisions that isolate infected endpoints, accounts, or mailboxes
+    to stop further spread.
+  captures_confidence: false
+- id: fraud_prevention
+  display_name: Fraud prevention
+  description: Decisions to block, reverse, or verify suspicious payroll and financial
+    changes.
+  captures_confidence: false
+- id: data_exposure
+  display_name: Data exposure
+  description: Decisions and conclusions about possible exposure of employee personal
+    data.
+  captures_confidence: true
+- id: notification
+  display_name: Notification
+  description: Decisions about internal, regulatory, or employee notification.
+  captures_confidence: false
+hypotheses:
+- id: H001
+  key: credential_compromise
+  label: Credential compromise
+- id: H002
+  key: internal_malware_spread
+  label: Uncontrolled internal spread
+- id: H003
+  key: payroll_fraud_attempt
+  label: Payroll diversion fraud attempt
+- id: H004
+  key: employee_data_exfiltration
+  label: Employee data exfiltration
+- id: H005
+  key: legitimate_vendor_data_transfer
+  label: Legitimate vendor data transfer
+evidence:
+  observations:
+  - id: O001
+    source: endpoint_monitoring
+    statement: Endpoint telemetry shows a previously unseen process persisting on
+      HR-COORD-07's laptop after an email attachment was opened during active recruiting.
+    reliability: confirmed
+  - id: O002
+    source: email_security
+    statement: Several internal mailboxes received a CV attachment sent from HR-COORD-07's
+      mailbox that HR did not send.
+    reliability: high
+  - id: O003
+    source: identity_monitoring
+    statement: HR-COORD-07's account authenticated to the payroll self-service admin
+      panel outside its normal usage pattern.
+    reliability: high
+  - id: O004
+    source: payroll_system
+    statement: Four employee bank-account change requests were submitted through
+      payroll self-service within an eleven-minute window.
+    reliability: confirmed
+  - id: O005
+    source: network_monitoring
+    statement: The HR database export service generated an unusually large outbound
+      transfer shortly after normal working hours.
+    reliability: high
+  - id: O006
+    source: asset_inventory
+    statement: The HR database contains national ID numbers, home addresses, and
+      bank account details for all current employees.
+    reliability: confirmed
+  findings:
+  - id: FD001
+    statement: The attachment was a macro-enabled document disguised as a CV; opening
+      it silently installed a remote-access trojan.
+    reliability: high
+  - id: FD002
+    statement: The sender's domain closely imitated a real recruitment platform
+      with one substituted character, and no matching applicant exists in the recruiting
+      system.
+    reliability: high
+  - id: FD003
+    statement: HR-COORD-07's mailbox automatically sent the same malicious attachment
+      to 42 internal recipients across Finance, Payroll, and Operations shortly
+      after the endpoint was compromised.
+    reliability: high
+  - id: FD004
+    statement: Eleven additional endpoints executed the malicious macro before email
+      filtering blocked further delivery, and IT Helpdesk logged over 60 tickets
+      for erratic device behavior in the same period.
+    reliability: high
+  - id: FD005
+    statement: The payroll admin-panel session used HR-COORD-07's credentials from
+      a device that does not match any endpoint she has used before.
+    reliability: high
+  - id: FD006
+    statement: The four bank-account change requests point to newly opened accounts
+      at a bank none of the affected employees had used previously.
+    reliability: high
+  - id: FD007
+    statement: Payroll change requests submitted before 22:00 are processed automatically
+      that night, and the four requests remain unblocked.
+    reliability: confirmed
+  - id: FD008
+    statement: The outbound HR-database transfer went to an internet address with
+      no association to any approved organizational vendor.
+    reliability: high
+  - id: FD009
+    statement: The transferred records include national ID numbers, home addresses,
+      and bank details for all current employees.
+    reliability: high
+  - id: FD010
+    statement: No scheduled or approved data-processing job accounts for a transfer
+      of this size at this time.
+    reliability: high
+  - id: FD011
+    statement: Forensic review recovered a compressed archive matching the transferred
+      byte count, containing the full employee HR export.
+    reliability: confirmed
+  - id: FD012
+    statement: The outbound transfer's destination belongs to the organization's
+      contracted payroll-processing vendor.
+    reliability: high
+  - id: FD013
+    statement: The transferred fields match the vendor's documented onboarding-migration
+      data specification.
+    reliability: high
+  - id: FD014
+    statement: The transfer correlates with an approved vendor-migration change
+      ticket and its scheduled execution window.
+    reliability: confirmed
+  - id: FD015
+    statement: Forensic review found no host or network artifact showing a transfer
+      of HR data outside the approved vendor migration.
+    reliability: high
+investigations:
+- id: I001
+  label: Analyze the malicious attachment
+  performer_roles:
+  - soc
+  request_description: Determine what the CV attachment actually did when it was
+    opened.
+  match_hints:
+  - analyze the attachment
+  - what did the file do
+  - malware analysis
+  - what is the trojan
+  prerequisites:
+    all_evidence:
+    - O001
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I002
+  label: Review the original applicant email
+  performer_roles:
+  - hr_director
+  request_description: Check whether the sender was a real job applicant.
+  match_hints:
+  - original email
+  - was this a real applicant
+  - sender address
+  - who sent the cv
+  prerequisites:
+    all_evidence:
+    - O001
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I003
+  label: Trace mailbox activity after compromise
+  performer_roles:
+  - soc
+  request_description: Determine what the compromised mailbox did after the endpoint
+    was infected.
+  match_hints:
+  - mailbox activity
+  - what did the mailbox send
+  - who else received the attachment
+  - internal spread
+  prerequisites:
+    all_evidence:
+    - O002
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I004
+  label: Assess endpoint impact across the network
+  performer_roles:
+  - soc
+  request_description: Determine how many other endpoints were affected.
+  match_hints:
+  - how many endpoints
+  - scale of the spread
+  - other infected machines
+  - helpdesk tickets
+  prerequisites:
+    all_evidence:
+    - O002
+    - FD003
+    any_evidence: []
+  duration_minutes: 15
+  repeatable: false
+- id: I005
+  label: Inspect payroll admin-panel access
+  performer_roles:
+  - soc
+  request_description: Determine whether the payroll admin-panel session was legitimate.
+  match_hints:
+  - payroll panel access
+  - admin panel session
+  - was that a legitimate login
+  - payroll system access
+  prerequisites:
+    all_evidence:
+    - O003
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I006
+  label: Review submitted bank-account change requests
+  performer_roles:
+  - hr_director
+  request_description: Check the four bank-account change requests for legitimacy.
+  match_hints:
+  - bank account change requests
+  - review the change requests
+  - are these real accounts
+  - payroll change requests
+  prerequisites:
+    all_evidence:
+    - O004
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I007
+  label: Correlate change requests with the payroll cutoff
+  performer_roles:
+  - hr_director
+  request_description: Determine when the pending change requests will actually
+    take effect.
+  match_hints:
+  - payroll cutoff
+  - when does payroll run
+  - when will the changes take effect
+  - payroll processing schedule
+  prerequisites:
+    all_evidence:
+    - O004
+    - FD006
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I008
+  label: Identify the outbound HR-database transfer destination
+  performer_roles:
+  - soc
+  request_description: Determine where the large outbound HR-database transfer
+    was sent.
+  match_hints:
+  - outbound destination
+  - where did the transfer go
+  - where that data went
+  - approved vendor destination
+  prerequisites:
+    all_evidence:
+    - O005
+    any_evidence: []
+  duration_minutes: 5
+  repeatable: false
+- id: I009
+  label: Identify which records were included in the transfer
+  performer_roles:
+  - soc
+  request_description: Determine which HR records were included in the outbound
+    transfer.
+  match_hints:
+  - which records
+  - what data was included
+  - what fields were transferred
+  - employee data included
+  prerequisites:
+    all_evidence:
+    - O005
+    - O006
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I010
+  label: Correlate the transfer with scheduled data-processing jobs
+  performer_roles:
+  - soc
+  request_description: Compare the transfer with any approved data-processing jobs
+    or migrations.
+  match_hints:
+  - scheduled data job
+  - approved migration
+  - expected data process
+  - vendor migration schedule
+  prerequisites:
+    all_evidence:
+    - O005
+    any_evidence: []
+  duration_minutes: 10
+  repeatable: false
+- id: I011
+  label: Forensically determine transferred content
+  performer_roles:
+  - soc
+  request_description: Determine what content was actually included in the outbound
+    transfer.
+  match_hints:
+  - transferred content
+  - what data left
+  - forensic transfer review
+  - archive contents
+  prerequisites:
+    all_evidence:
+    - O005
+    any_evidence:
+    - FD008
+    - FD012
+  duration_minutes: 15
+  repeatable: false
+events:
+- id: E001
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 5
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O001
+  once: true
+- id: E002
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 10
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O002
+  once: true
+- id: E003
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 15
+  effects:
+  - type: reveal_observation
+    role_id: hr_director
+    observation_id: O001
+  once: true
+- id: E004
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 25
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O003
+  once: true
+- id: E005
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 30
+  effects:
+  - type: reveal_observation
+    role_id: hr_director
+    observation_id: O004
+  once: true
+- id: E006
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 40
+  effects:
+  - type: reveal_observation
+    role_id: ciso
+    observation_id: O002
+  once: true
+- id: E007
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 45
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O005
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O006
+  once: true
+- id: E020
+  type: stakeholder_interaction
+  trigger:
+    type: assessment_exists
+    hypothesis_id: H004
+    minimum_confidence: medium
+  actor_role: ceo
+  interaction:
+    objective: Obtain a concise executive assessment of possible employee data exposure
+      and financial fraud.
+    context:
+    - Senior leadership and the board need an update.
+    - Focus on business and reputational impact.
+    - Ask what is known versus suspected.
+    - Avoid unnecessary technical detail.
+  follow_ups:
+  - id: FU001
+    when:
+      trainee_assessment:
+        hypothesis_id: H004
+        confidence: confirmed
+      evidence_support:
+        below: confirmed
+        confirmation_evidence_ids:
+        - FD011
+    objective: Ask what evidence confirms the trainee's claim that employee data
+      was exfiltrated.
+    context:
+    - Challenge unsupported certainty without deciding whether exfiltration occurred.
+  once: true
+- id: E021
+  type: stakeholder_interaction
+  trigger:
+    type: evidence_known
+    role_id: dpo
+    evidence_id: O006
+  actor_role: dpo
+  interaction:
+    objective: Determine what employee personal data may be affected and what remains
+      unknown.
+    context:
+    - Separate possible exposure from a confirmed personal-data breach.
+    - Ask for scope, affected data, evidence quality, and unresolved gaps.
+  once: true
+- id: E022
+  type: stakeholder_interaction
+  trigger:
+    type: evidence_known
+    role_id: hr_director
+    evidence_id: FD006
+  actor_role: hr_director
+  interaction:
+    objective: Get an urgent recommendation on whether to block the four pending
+      bank-account change requests before the nightly payroll run.
+    context:
+    - The payroll run processes automatically at 22:00.
+    - Blocking a legitimate change would delay a real employee's pay.
+    - Ask for a clear recommendation and who is accountable for it.
+  once: true
+- id: E023
+  type: stakeholder_interaction
+  trigger:
+    type: event_fired
+    event_id: E006
+  actor_role: ceo
+  interaction:
+    objective: Balance pressure to restore email and payroll operations against
+      the SOC's need to contain the spread and preserve evidence.
+    context:
+    - Multiple departments are reporting erratic computer behavior and a flood
+      of helpdesk tickets.
+    - Operational disruption is creating pressure to restore normal service quickly.
+    - Ask for a practical recommendation and tradeoffs; do not negotiate autonomously.
+  once: true
+scoring:
+- id: involve_hr_director_promptly
+  description: Involve the HR Director promptly after the payroll admin-panel anomaly
+    is observed.
+  type: role_contacted_within
+  points: 20
+  within_minutes: 20
+  trigger_evidence: O003
+  target_role: hr_director
+- id: share_payroll_anomaly_with_hr
+  description: Share the payroll admin-panel anomaly with the HR Director.
+  type: evidence_shared_within
+  points: 20
+  within_minutes: 25
+  trigger_evidence: O003
+  target_role: hr_director
+  evidence_id: O003
+- id: block_fraudulent_payroll_changes
+  description: Make an explicit fraud-prevention decision after the suspicious
+    bank-account change requests are observed.
+  type: decision_within
+  points: 30
+  within_minutes: 20
+  trigger_evidence: O004
+  decision_category: fraud_prevention
+- id: timely_containment_decision
+  description: Make an explicit containment decision after the trojan's persistence
+    is observed.
+  type: decision_within
+  points: 30
+  within_minutes: 20
+  trigger_evidence: O001
+  decision_category: containment
+- id: involve_dpo_promptly
+  description: Involve the DPO promptly after the outbound HR-database transfer
+    is observed.
+  type: role_contacted_within
+  points: 20
+  within_minutes: 30
+  trigger_evidence: O005
+  target_role: dpo
+- id: share_outbound_observation_with_dpo
+  description: Share the outbound HR-database transfer observation with the DPO.
+  type: evidence_shared_within
+  points: 20
+  within_minutes: 30
+  trigger_evidence: O005
+  target_role: dpo
+  evidence_id: O005
+- id: avoid_premature_exfiltration_claim
+  description: Do not record employee data exfiltration as confirmed before confirmation
+    evidence exists.
+  type: avoid_premature_assessment
+  points: 30
+  hypothesis_id: H004
+  conclusion_confidence: confirmed
+  confirmation_evidence: FD011

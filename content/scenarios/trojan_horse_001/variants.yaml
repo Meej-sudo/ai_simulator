@@ -1,0 +1,93 @@
+schema_version: 2
+scenario_id: trojan_horse_001
+variants:
+- id: track_alpha
+  name: Track Alpha
+  ground_truth:
+    credential_compromise: true
+    internal_malware_spread: true
+    payroll_fraud_attempt: true
+    employee_data_exfiltration: true
+    legitimate_vendor_data_transfer: false
+    outbound_transfer_cause: attacker_exfiltration
+  observation_overrides: []
+  event_overrides: []
+  investigation_outcomes:
+    I001:
+      reveal_findings:
+      - FD001
+    I002:
+      reveal_findings:
+      - FD002
+    I003:
+      reveal_findings:
+      - FD003
+    I004:
+      reveal_findings:
+      - FD004
+    I005:
+      reveal_findings:
+      - FD005
+    I006:
+      reveal_findings:
+      - FD006
+    I007:
+      reveal_findings:
+      - FD007
+    I008:
+      reveal_findings:
+      - FD008
+    I009:
+      reveal_findings:
+      - FD009
+    I010:
+      reveal_findings:
+      - FD010
+    I011:
+      reveal_findings:
+      - FD011
+- id: track_bravo
+  name: Track Bravo
+  ground_truth:
+    credential_compromise: true
+    internal_malware_spread: true
+    payroll_fraud_attempt: true
+    employee_data_exfiltration: false
+    legitimate_vendor_data_transfer: true
+    outbound_transfer_cause: approved_vendor_migration
+  observation_overrides: []
+  event_overrides: []
+  investigation_outcomes:
+    I001:
+      reveal_findings:
+      - FD001
+    I002:
+      reveal_findings:
+      - FD002
+    I003:
+      reveal_findings:
+      - FD003
+    I004:
+      reveal_findings:
+      - FD004
+    I005:
+      reveal_findings:
+      - FD005
+    I006:
+      reveal_findings:
+      - FD006
+    I007:
+      reveal_findings:
+      - FD007
+    I008:
+      reveal_findings:
+      - FD012
+    I009:
+      reveal_findings:
+      - FD013
+    I010:
+      reveal_findings:
+      - FD014
+    I011:
+      reveal_findings:
+      - FD015
