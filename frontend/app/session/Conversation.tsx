@@ -18,6 +18,7 @@ type Props = {
   evidence: Evidence[];
   streamingText: string;
   streamingRole: string;
+  pendingMessage: { threadId: string; text: string; citations: string[] } | null;
 };
 
 const bridgeTypes = new Set([
@@ -173,6 +174,7 @@ export default function Conversation({
   evidence,
   streamingText,
   streamingRole,
+  pendingMessage,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const isBridge = activeThread === "channel:bridge";
@@ -309,6 +311,24 @@ export default function Conversation({
             />
           );
         })}
+
+        {pendingMessage &&
+          pendingMessage.threadId === activeThread &&
+          !visible.some(
+            (event) =>
+              event.event_type === "QUESTION_ASKED" &&
+              asString(event.payload.message) === pendingMessage.text,
+          ) && (
+            <Message
+              mine
+              name="You"
+              index={0}
+              time={events.at(-1)?.simulation_time ?? 0}
+              text={pendingMessage.text}
+              citations={pendingMessage.citations}
+              evidence={evidence}
+            />
+          )}
 
         {streamingRole !== "" && streamingRole === roleId && (
           <Message

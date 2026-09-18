@@ -110,6 +110,7 @@ export default function SessionView({
           roles={state.roles}
         />
         <main className="conversation-pane">
+<<<<<<< HEAD
           {activeInteraction ? (
             <InteractionConversation
               busy={state.busy}
@@ -140,6 +141,29 @@ export default function SessionView({
               />
             </>
           )}
+=======
+          <Conversation
+            activeThread={state.activeThread}
+            events={state.events}
+            evidence={discoveredEvidence}
+            pendingMessage={state.pendingMessage}
+            roles={state.roles}
+            streamingRole={state.streamingRole}
+            streamingText={state.streamingText}
+          />
+          <Composer
+            activeThread={state.activeThread}
+            busy={state.busy}
+            categories={scenario.decision_categories}
+            evidence={discoveredEvidence}
+            suggestions={state.suggestions}
+            onAssess={controller.recordAssessment}
+            onDecide={controller.recordDecision}
+            onInvestigate={controller.requestWork}
+            onMessage={controller.sendMessage}
+            roles={state.roles}
+          />
+>>>>>>> fork/updated_gamee_logic
         </main>
         <ContextRail
           assessments={state.assessments}
