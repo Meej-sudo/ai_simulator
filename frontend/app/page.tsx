@@ -6,7 +6,7 @@ import ModelConfiguration from "./ModelConfiguration";
 import ScenarioEditor from "./ScenarioEditor";
 import { api } from "./api";
 import SessionView from "./session/SessionView";
-import type { Completion, Scenario, Session } from "./session/types";
+import type { Completion, Evaluation, Scenario, Session } from "./session/types";
 
 const ACTIVE_SESSION_KEY = "incident-room-active-session";
 
@@ -38,21 +38,35 @@ export default function Home() {
         if (items.length === 0) {
           setError("No scenarios are available. Add a scenario before starting an exercise.");
         }
-        // Rejoin an exercise that is still running after a page reload.
+        // Rejoin an exercise that is still running after a page reload, or show
+        // the debrief for one that closed while the tab was away. The time limit
+        // completes sessions on its own, so a reload must not strand the trainee
+        // at the launcher with the result unreachable.
         const savedId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
         if (!savedId) return;
         try {
           const saved = await api<Session>(`/sessions/${savedId}`);
-          if (
-            saved.status === "running" &&
-            items.some((scenario) => scenario.id === saved.scenario_id)
-          ) {
-            setScenarioId(saved.scenario_id);
+          const scenario = items.find((item) => item.id === saved.scenario_id);
+          if (scenario && saved.status === "running") {
+            setScenarioId(scenario.id);
             setVariantId(saved.variant_id);
             setSessionId(saved.id);
-          } else {
-            window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+            return;
           }
+          if (scenario && saved.status === "completed") {
+            const evaluation = await api<Evaluation>(
+              `/sessions/${saved.id}/evaluation`,
+            );
+            setCompletion({
+              sessionId: saved.id,
+              scenarioName: scenario.name,
+              endedAtMinute: saved.simulation_time,
+              totalScore: evaluation.total_score,
+              possibleScore: evaluation.possible_score,
+              rules: evaluation.rules ?? [],
+            });
+          }
+          window.localStorage.removeItem(ACTIVE_SESSION_KEY);
         } catch {
           window.localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
