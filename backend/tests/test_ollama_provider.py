@@ -17,6 +17,7 @@ from app.llm.models import (
     InvestigationInterpretationRequest,
     ResponseCertainty,
     RoleResponseRequest,
+    StakeholderMessageRequest,
 )
 from app.llm.ollama_provider import OllamaLLMProvider, list_ollama_models
 
@@ -82,6 +83,45 @@ async def test_ollama_provider_sends_schema_constrained_role_request():
     assert captured["messages"][1] == {"role": "user", "content": "What happened?"}
     assert result.certainty == ResponseCertainty.HIGH
     assert result.referenced_evidence_ids == ["O001"]
+
+
+async def test_ollama_provider_sends_constrained_stakeholder_request():
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"message": {"content": json.dumps({
+                "message": "What is known, and what remains uncertain?",
+            })}},
+        )
+
+    base = role_request()
+    stakeholder_request = StakeholderMessageRequest(
+        role_id="ceo",
+        role_display_name="Chief Executive Officer",
+        responsibilities=["set business priorities"],
+        communication_style=base.communication_style,
+        personality=base.personality,
+        objective="Obtain a concise executive assessment.",
+        context=["Ask what is known versus suspected."],
+        permitted_observations=base.permitted_observations,
+        permitted_findings=[],
+        relevant_assessments=[],
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        provider = OllamaLLMProvider("http://ollama:11434", "local-model", client=client)
+        result = await provider.generate_stakeholder_message(stakeholder_request)
+
+    assert result.message == "What is known, and what remains uncertain?"
+    assert captured["format"]["additionalProperties"] is False
+    prompt = captured["messages"][0]["content"]
+    assert "Obtain a concise executive assessment." in prompt
+    assert "A failed login was observed." in prompt
+    assert "ground truth" in prompt.casefold()  # explicit prohibition, never scenario data
+    assert "reveal_findings" not in prompt
+    assert "FD008" not in prompt
 
 
 async def test_ollama_provider_supports_investigation_and_assessment_contracts():

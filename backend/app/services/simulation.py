@@ -4,9 +4,16 @@ from app.domain.evaluation.engine import EvaluationEngine, EvaluationResult
 from app.domain.knowledge.engine import KnowledgeEngine, RoleKnowledge
 from app.domain.scenarios.models import (
     CONFIDENCE_SEMANTICS,
+    AllTrigger,
+    AnyTrigger,
+    AssessmentExistsTrigger,
     Confidence,
     Reliability,
+    RevealEvidenceEventDefinition,
+    RevealFindingEffect,
+    RevealObservationEffect,
     RuntimeScenario,
+    StakeholderInteractionEventDefinition,
 )
 from app.domain.simulation.models import (
     AssessmentProjection,
@@ -15,16 +22,22 @@ from app.domain.simulation.models import (
     EventType,
     InvestigationRequestResult,
     InvestigationRun,
+    InteractionMessage,
+    InteractionResponse,
+    InteractionStatus,
     InvestigationStatus,
     SessionStatus,
+    StakeholderInteraction,
 )
-from app.domain.simulation.timeline import TimelineEngine
+from app.domain.simulation.event_engine import EventEngine, SessionState
 from app.llm.base import LLMProvider
 from app.llm.models import (
     AssessmentInterpretationRequest,
     EligibleInvestigation,
     InvestigationInterpretationRequest,
     RoleResponseRequest,
+    StakeholderAssessmentContext,
+    StakeholderMessageRequest,
     ThreadTurn,
 )
 from app.llm.validation import (
@@ -43,8 +56,9 @@ class SimulationService:
         self.repo = SessionRepository(db)
         self.scenarios = scenarios
         self.knowledge_engine = KnowledgeEngine()
-        self.timeline_engine = TimelineEngine()
+        self.event_engine = EventEngine()
         self.evaluation_engine = EvaluationEngine()
+        self.llm_provider = llm_provider
         self.role_responder = ConstrainedRoleResponder(llm_provider)
         self.investigation_interpreter = ConstrainedInvestigationInterpreter(
             llm_provider
@@ -79,6 +93,11 @@ class SimulationService:
         return self.repo.list_all()
 
     def start(self, session_id: str) -> SessionRecord:
+        """Start a session and execute deterministic non-LLM reveal events.
+
+        The sync entry point remains for service-level compatibility. API callers
+        use start_async so stakeholder events can also generate wording.
+        """
         session = self.get_session(session_id)
         if session.status != SessionStatus.CREATED:
             raise InvalidOperationError("only a created session can be started")
@@ -90,44 +109,46 @@ class SimulationService:
             EventType.SESSION_STARTED,
             payload={"scenario_version": session.scenario_version},
         )
-        for timeline_event in self.timeline_engine.starting_events(scenario.timeline):
-            self._trigger_timeline_event(session, timeline_event)
+        self._process_reveal_events(session, scenario)
+        self.repo.commit()
+        return session
+
+    async def start_async(self, session_id: str) -> SessionRecord:
+        session = self.start(session_id)
+        await self._process_authored_events(session, self._runtime_scenario(session))
         self.repo.commit()
         return session
 
     def advance_time(self, session_id: str, minutes: int) -> SessionRecord:
+        """Advance time while preserving the original synchronous service API."""
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
         old_time = session.simulation_time
         duration = scenario.scenario.duration_minutes
         new_time = min(old_time + minutes, duration)
 
-        due: list[tuple[int, int, object]] = [
-            (item.at_minute, 0, item)
-            for item in self.timeline_engine.due_events(
-                scenario.timeline, old_time, new_time
-            )
-        ]
-        due.extend(
-            (run.due_at, 1, run)
+        investigation_runs = [
+            run
             for run in self.investigations(session.id)
             if run.status == InvestigationStatus.IN_PROGRESS
             and old_time < run.due_at <= new_time
+        ]
+        checkpoints = set(
+            self.event_engine.time_checkpoints(scenario.events, old_time, new_time)
         )
-        for _, kind, item in sorted(
-            due,
-            key=lambda entry: (
-                entry[0],
-                entry[1],
-                entry[2].id,
-            ),
-        ):
-            if kind == 0:
-                self._trigger_timeline_event(session, item)
-            else:
-                self._complete_investigation(session, scenario, item)
+        checkpoints.update(run.due_at for run in investigation_runs)
+        for checkpoint in sorted(checkpoints):
+            session.simulation_time = checkpoint
+            self._process_reveal_events(session, scenario)
+            for run in sorted(
+                (item for item in investigation_runs if item.due_at == checkpoint),
+                key=lambda item: item.id,
+            ):
+                self._complete_investigation(session, scenario, run)
+            self._process_reveal_events(session, scenario)
 
         session.simulation_time = new_time
+        self._process_reveal_events(session, scenario)
         self.repo.append_event(
             session.id,
             new_time,
@@ -138,7 +159,56 @@ class SimulationService:
                 "minutes": new_time - old_time,
             },
         )
-        if new_time >= scenario.scenario.duration_minutes:
+        if new_time >= duration:
+            session.status = SessionStatus.COMPLETED
+            self.repo.append_event(
+                session.id,
+                new_time,
+                EventType.SESSION_COMPLETED,
+                payload={"reason": "time_limit"},
+            )
+        self.repo.commit()
+        return session
+
+    async def advance_time_async(self, session_id: str, minutes: int) -> SessionRecord:
+        """Advance API sessions and execute every event at its exact checkpoint."""
+        session = self._running_session(session_id)
+        scenario = self._runtime_scenario(session)
+        old_time = session.simulation_time
+        duration = scenario.scenario.duration_minutes
+        new_time = min(old_time + minutes, duration)
+        investigation_runs = [
+            run
+            for run in self.investigations(session.id)
+            if run.status == InvestigationStatus.IN_PROGRESS
+            and old_time < run.due_at <= new_time
+        ]
+        checkpoints = set(
+            self.event_engine.time_checkpoints(scenario.events, old_time, new_time)
+        )
+        checkpoints.update(run.due_at for run in investigation_runs)
+        checkpoints.add(new_time)
+        for checkpoint in sorted(checkpoints):
+            session.simulation_time = checkpoint
+            await self._process_authored_events(session, scenario)
+            for run in sorted(
+                (item for item in investigation_runs if item.due_at == checkpoint),
+                key=lambda item: item.id,
+            ):
+                self._complete_investigation(session, scenario, run)
+            await self._process_authored_events(session, scenario)
+
+        self.repo.append_event(
+            session.id,
+            new_time,
+            EventType.TIME_ADVANCED,
+            payload={
+                "from_minute": old_time,
+                "to_minute": new_time,
+                "minutes": new_time - old_time,
+            },
+        )
+        if new_time >= duration:
             session.status = SessionStatus.COMPLETED
             self.repo.append_event(
                 session.id,
@@ -194,6 +264,16 @@ class SimulationService:
             target_role=to_role,
             payload={"evidence_id": evidence_id},
         )
+        self._process_reveal_events(session, scenario)
+        self.repo.commit()
+        return event
+
+    async def share_evidence_async(
+        self, session_id: str, from_role: str, to_role: str, evidence_id: str
+    ):
+        event = self.share_evidence(session_id, from_role, to_role, evidence_id)
+        session = self.get_session(session_id)
+        await self._process_authored_events(session, self._runtime_scenario(session))
         self.repo.commit()
         return event
 
@@ -295,6 +375,7 @@ class SimulationService:
             actor_role=target_role,
             payload=response.model_dump(mode="json"),
         )
+        await self._process_authored_events(session, scenario)
         self.repo.commit()
         return response
 
@@ -326,6 +407,20 @@ class SimulationService:
                 "sender": "trainee",
             },
         )
+        self._process_reveal_events(session, scenario)
+        self.repo.commit()
+        return event
+
+    async def post_message_async(
+        self,
+        session_id: str,
+        thread_id: str,
+        text: str,
+        cited_evidence_ids: list[str],
+    ):
+        event = self.post_message(session_id, thread_id, text, cited_evidence_ids)
+        session = self.get_session(session_id)
+        await self._process_authored_events(session, self._runtime_scenario(session))
         self.repo.commit()
         return event
 
@@ -529,6 +624,7 @@ class SimulationService:
                     "completed_at": due_at,
                 }
             )
+        await self._process_authored_events(session, scenario)
         self.repo.commit()
         return InvestigationRequestResult(
             accepted=True,
@@ -641,6 +737,7 @@ class SimulationService:
                     "reason": "No public hypothesis could be mapped reliably.",
                 },
             )
+        await self._process_authored_events(session, scenario)
         self.repo.commit()
         return recorded
 
@@ -741,8 +838,250 @@ class SimulationService:
                 "rationale": rationale,
             },
         )
+        self._process_reveal_events(session, scenario)
         self.repo.commit()
         return event
+
+    async def make_decision_async(
+        self,
+        session_id: str,
+        actor_role: str,
+        category: str,
+        decision: str,
+        confidence: Confidence | None,
+        rationale: str | None,
+    ):
+        event = self.make_decision(
+            session_id, actor_role, category, decision, confidence, rationale
+        )
+        session = self.get_session(session_id)
+        await self._process_authored_events(session, self._runtime_scenario(session))
+        self.repo.commit()
+        return event
+
+    def interactions(self, session_id: str) -> list[StakeholderInteraction]:
+        session = self.get_session(session_id)
+        scenario = self._runtime_scenario(session)
+        projected: dict[str, StakeholderInteraction] = {}
+        for event in self.repo.events(session.id):
+            interaction_id = str(event.payload.get("interaction_id", ""))
+            if event.event_type == EventType.STAKEHOLDER_INTERACTION_STARTED:
+                if not interaction_id:
+                    continue
+                role_id = event.actor_role or ""
+                try:
+                    display_name = scenario.role(role_id).display_name
+                except StopIteration:
+                    display_name = role_id
+                projected[interaction_id] = StakeholderInteraction(
+                    id=interaction_id,
+                    event_definition_id=str(
+                        event.payload.get("event_definition_id", "")
+                    ),
+                    actor_role=role_id,
+                    actor_display_name=display_name,
+                    started_at=event.simulation_time,
+                    status=InteractionStatus.WAITING_FOR_TRAINEE,
+                    messages=[],
+                    responses=[],
+                )
+                continue
+            interaction = projected.get(interaction_id)
+            if interaction is None:
+                continue
+            if event.event_type in {
+                EventType.STAKEHOLDER_MESSAGE_CREATED,
+                EventType.STAKEHOLDER_FOLLOWUP_CREATED,
+            }:
+                interaction.messages.append(
+                    InteractionMessage(
+                        id=event.id,
+                        kind=(
+                            "follow_up"
+                            if event.event_type == EventType.STAKEHOLDER_FOLLOWUP_CREATED
+                            else "stakeholder"
+                        ),
+                        message=str(event.payload.get("message", "")),
+                        simulation_time=event.simulation_time,
+                    )
+                )
+                interaction.status = InteractionStatus.WAITING_FOR_TRAINEE
+            elif event.event_type == EventType.TRAINEE_STAKEHOLDER_RESPONSE:
+                interaction.responses.append(
+                    InteractionResponse(
+                        id=event.id,
+                        message=str(event.payload.get("message", "")),
+                        simulation_time=event.simulation_time,
+                    )
+                )
+                interaction.status = InteractionStatus.RESPONDED
+            elif event.event_type == EventType.STAKEHOLDER_INTERACTION_RESOLVED:
+                interaction.status = InteractionStatus.RESOLVED
+        return list(projected.values())
+
+    async def respond_to_interaction(
+        self,
+        session_id: str,
+        interaction_id: str,
+        message: str,
+    ) -> StakeholderInteraction:
+        session = self._running_session(session_id)
+        scenario = self._runtime_scenario(session)
+        interaction = next(
+            (item for item in self.interactions(session_id) if item.id == interaction_id),
+            None,
+        )
+        if interaction is None:
+            raise NotFoundError(f"interaction not found: {interaction_id}")
+        if interaction.status != InteractionStatus.WAITING_FOR_TRAINEE:
+            raise InvalidOperationError("interaction is not waiting for a trainee response")
+        try:
+            definition = next(
+                item
+                for item in scenario.events
+                if item.id == interaction.event_definition_id
+                and isinstance(item, StakeholderInteractionEventDefinition)
+            )
+        except StopIteration as exc:
+            raise InvalidOperationError(
+                "interaction definition is unavailable in this session snapshot"
+            ) from exc
+
+        actor_knowledge = self.role_knowledge(session.id, definition.actor_role)
+        discovered = sorted(
+            set().union(
+                *(
+                    self.role_knowledge(session.id, role.id).evidence_ids
+                    for role in scenario.roles
+                )
+            )
+        )
+        current_assessments = self.assessments(session.id).current
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.TRAINEE_STAKEHOLDER_RESPONSE,
+            target_role=definition.actor_role,
+            payload={
+                "interaction_id": interaction_id,
+                "message": message,
+                "actor": "trainee",
+                "target_role": definition.actor_role,
+                "knowledge_snapshot": {
+                    "stakeholder_role": definition.actor_role,
+                    "stakeholder_evidence_ids": sorted(actor_knowledge.evidence_ids),
+                    "trainee_discovered_evidence_ids": discovered,
+                },
+                "current_assessments": [
+                    item.model_dump(mode="json") for item in current_assessments
+                ],
+            },
+        )
+
+        follow_up = self._required_follow_up(
+            definition,
+            interaction_id,
+            message,
+            set(discovered),
+            self.repo.events(session.id),
+        )
+        if follow_up is not None:
+            request = self._stakeholder_message_request(
+                session,
+                scenario,
+                definition,
+                follow_up.objective,
+                follow_up.context,
+            )
+            generated = await self.llm_provider.generate_stakeholder_message(request)
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.STAKEHOLDER_FOLLOWUP_CREATED,
+                actor_role=definition.actor_role,
+                payload={
+                    "interaction_id": interaction_id,
+                    "follow_up_id": follow_up.id,
+                    "message": generated.message,
+                },
+            )
+        else:
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
+                EventType.STAKEHOLDER_INTERACTION_RESOLVED,
+                actor_role=definition.actor_role,
+                payload={"interaction_id": interaction_id},
+            )
+        await self._process_authored_events(session, scenario)
+        self.repo.commit()
+        return next(
+            item for item in self.interactions(session_id) if item.id == interaction_id
+        )
+
+    @staticmethod
+    def _response_confidence(message: str) -> Confidence:
+        value = message.casefold()
+        negative_confirmation = any(
+            phrase in value
+            for phrase in (
+                "not confirmed",
+                "isn't confirmed",
+                "is not confirmed",
+                "unconfirmed",
+                "no confirmation",
+            )
+        )
+        if negative_confirmation:
+            if any(phrase in value for phrase in ("strongly suspect", "high confidence", "highly likely", "very likely")):
+                return Confidence.HIGH
+            if any(phrase in value for phrase in ("suspect", "likely", "possible", "may have")):
+                return Confidence.MEDIUM
+            return Confidence.LOW
+        if any(word in value for word in ("confirmed", "certain", "definitely", "proven")):
+            return Confidence.CONFIRMED
+        if any(phrase in value for phrase in ("strongly suspect", "high confidence", "highly likely", "very likely")):
+            return Confidence.HIGH
+        if any(phrase in value for phrase in ("suspect", "likely", "possible", "may have")):
+            return Confidence.MEDIUM
+        return Confidence.LOW
+
+    def _required_follow_up(
+        self,
+        definition: StakeholderInteractionEventDefinition,
+        interaction_id: str,
+        message: str,
+        discovered_evidence: set[str],
+        events: list[EventSnapshot],
+    ):
+        already_created = {
+            str(event.payload.get("follow_up_id"))
+            for event in events
+            if event.event_type == EventType.STAKEHOLDER_FOLLOWUP_CREATED
+            and event.payload.get("interaction_id") == interaction_id
+        }
+        rank = {
+            Confidence.LOW: 0,
+            Confidence.MEDIUM: 1,
+            Confidence.HIGH: 2,
+            Confidence.CONFIRMED: 3,
+        }
+        response_confidence = self._response_confidence(message)
+        for follow_up in definition.follow_ups:
+            if follow_up.id in already_created:
+                continue
+            condition = follow_up.when
+            claimed = condition.trainee_assessment.confidence
+            if rank[response_confidence] < rank[claimed]:
+                continue
+            confirmation_known = bool(
+                discovered_evidence
+                & set(condition.evidence_support.confirmation_evidence_ids)
+            )
+            support = Confidence.CONFIRMED if confirmation_known else Confidence.LOW
+            if rank[support] < rank[condition.evidence_support.below]:
+                return follow_up
+        return None
 
     def events(self, session_id: str) -> list[EventSnapshot]:
         self.get_session(session_id)
@@ -750,6 +1089,9 @@ class SimulationService:
             EventType.OBSERVATION_REVEALED,
             EventType.FINDING_REVEALED,
             EventType.EVIDENCE_SHARED,
+            EventType.EVENT_DEFINITION_FIRED,
+            EventType.STAKEHOLDER_INTERACTION_STARTED,
+            EventType.TRAINEE_STAKEHOLDER_RESPONSE,
         }
         return [
             event.model_copy(update={"payload": {"redacted": True}})
@@ -934,26 +1276,211 @@ class SimulationService:
                 },
             )
 
-    def _trigger_timeline_event(self, session, timeline_event) -> None:
+    def _event_state(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        fired_in_cycle: set[str] | None = None,
+    ) -> SessionState:
+        return SessionState(
+            simulation_time=session.simulation_time,
+            events=self.repo.events(session.id, session.simulation_time),
+            evidence_by_role={
+                role.id: self.role_knowledge(session.id, role.id).evidence_ids
+                for role in scenario.roles
+            },
+            fired_in_cycle=fired_in_cycle or set(),
+        )
+
+    def _process_reveal_events(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+    ) -> None:
+        fired_in_cycle: set[str] = set()
+        while True:
+            eligible = [
+                definition
+                for definition in self.event_engine.evaluate(
+                    scenario,
+                    self._event_state(session, scenario, fired_in_cycle),
+                )
+                if isinstance(definition, RevealEvidenceEventDefinition)
+            ]
+            if not eligible:
+                return
+            for definition in eligible:
+                self._execute_reveal_event(session, definition)
+                fired_in_cycle.add(definition.id)
+
+    async def _process_authored_events(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+    ) -> None:
+        fired_in_cycle: set[str] = set()
+        while True:
+            eligible = self.event_engine.evaluate(
+                scenario,
+                self._event_state(session, scenario, fired_in_cycle),
+            )
+            if not eligible:
+                return
+            for definition in eligible:
+                if isinstance(definition, RevealEvidenceEventDefinition):
+                    self._execute_reveal_event(session, definition)
+                elif isinstance(definition, StakeholderInteractionEventDefinition):
+                    await self._execute_stakeholder_interaction(
+                        session, scenario, definition
+                    )
+                fired_in_cycle.add(definition.id)
+
+    def _execute_reveal_event(
+        self,
+        session: SessionRecord,
+        definition: RevealEvidenceEventDefinition,
+    ) -> None:
         self.repo.append_event(
             session.id,
-            timeline_event.at_minute,
-            EventType.TIMELINE_EVENT_TRIGGERED,
-            target_role=timeline_event.role,
-            payload={"timeline_event_id": timeline_event.id},
+            session.simulation_time,
+            EventType.EVENT_DEFINITION_FIRED,
+            payload={
+                "event_definition_id": definition.id,
+                "event_definition_type": definition.type,
+            },
         )
-        for observation_id in timeline_event.observation_ids:
+        target_roles = {effect.role_id for effect in definition.effects}
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.TIMELINE_EVENT_TRIGGERED,
+            target_role=next(iter(target_roles)) if len(target_roles) == 1 else None,
+            payload={
+                "timeline_event_id": definition.id,
+                "event_definition_id": definition.id,
+            },
+        )
+        for effect in definition.effects:
+            if isinstance(effect, RevealObservationEffect):
+                event_type = EventType.OBSERVATION_REVEALED
+                payload = {
+                    "observation_id": effect.observation_id,
+                    "source": "authored_event",
+                    "event_definition_id": definition.id,
+                }
+            elif isinstance(effect, RevealFindingEffect):
+                event_type = EventType.FINDING_REVEALED
+                payload = {
+                    "finding_id": effect.finding_id,
+                    "source": "authored_event",
+                    "event_definition_id": definition.id,
+                }
+            else:
+                continue
             self.repo.append_event(
                 session.id,
-                timeline_event.at_minute,
-                EventType.OBSERVATION_REVEALED,
-                actor_role=timeline_event.role,
-                payload={
-                    "observation_id": observation_id,
-                    "source": "timeline",
-                    "timeline_event_id": timeline_event.id,
-                },
+                session.simulation_time,
+                event_type,
+                actor_role=effect.role_id,
+                payload=payload,
             )
+
+    async def _execute_stakeholder_interaction(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        definition: StakeholderInteractionEventDefinition,
+    ) -> None:
+        role = self._require_role(scenario, definition.actor_role)
+        request = self._stakeholder_message_request(
+            session,
+            scenario,
+            definition,
+            definition.interaction.objective,
+            definition.interaction.context,
+        )
+        response = await self.llm_provider.generate_stakeholder_message(request)
+        fired = self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.EVENT_DEFINITION_FIRED,
+            actor_role=definition.actor_role,
+            payload={
+                "event_definition_id": definition.id,
+                "event_definition_type": definition.type,
+            },
+        )
+        interaction_id = fired.id
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.STAKEHOLDER_INTERACTION_STARTED,
+            actor_role=definition.actor_role,
+            payload={
+                "interaction_id": interaction_id,
+                "event_definition_id": definition.id,
+                "target": "trainee",
+            },
+        )
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.STAKEHOLDER_MESSAGE_CREATED,
+            actor_role=definition.actor_role,
+            payload={
+                "interaction_id": interaction_id,
+                "message": response.message,
+                "actor_display_name": role.display_name,
+            },
+        )
+
+    def _stakeholder_message_request(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        definition: StakeholderInteractionEventDefinition,
+        objective: str,
+        context: list[str],
+    ) -> StakeholderMessageRequest:
+        role = self._require_role(scenario, definition.actor_role)
+        knowledge = self.role_knowledge(session.id, role.id)
+        relevant_ids = self._assessment_ids_for_trigger(definition.trigger)
+        assessments = [
+            item
+            for item in self.assessments(session.id).current
+            if not relevant_ids or item.hypothesis_id in relevant_ids
+        ]
+        return StakeholderMessageRequest(
+            role_id=role.id,
+            role_display_name=role.display_name,
+            responsibilities=role.responsibilities,
+            communication_style=role.communication_style,
+            personality=role.personality,
+            response_guidance=role.response_guidance,
+            objective=objective,
+            context=context,
+            permitted_observations=knowledge.observations,
+            permitted_findings=knowledge.findings,
+            relevant_assessments=[
+                StakeholderAssessmentContext(
+                    hypothesis_id=item.hypothesis_id,
+                    hypothesis_label=item.hypothesis_label,
+                    confidence=item.confidence,
+                    statement=item.statement,
+                )
+                for item in assessments
+            ],
+        )
+
+    @classmethod
+    def _assessment_ids_for_trigger(cls, trigger) -> set[str]:
+        if isinstance(trigger, AssessmentExistsTrigger):
+            return {trigger.hypothesis_id}
+        if isinstance(trigger, (AllTrigger, AnyTrigger)):
+            return set().union(
+                *(cls._assessment_ids_for_trigger(item) for item in trigger.triggers)
+            )
+        return set()
 
     def _record_llm_violations(
         self,

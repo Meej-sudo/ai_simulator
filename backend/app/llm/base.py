@@ -8,6 +8,8 @@ from .models import (
     InvestigationInterpretationRequest,
     RoleResponse,
     RoleResponseRequest,
+    StakeholderMessageRequest,
+    StakeholderMessageResponse,
 )
 
 
@@ -25,6 +27,11 @@ class LLMProvider(Protocol):
     async def interpret_assessment(
         self, request: AssessmentInterpretationRequest
     ) -> AssessmentInterpretation:
+        ...
+
+    async def generate_stakeholder_message(
+        self, request: StakeholderMessageRequest
+    ) -> StakeholderMessageResponse:
         ...
 
 

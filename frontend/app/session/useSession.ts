@@ -11,6 +11,7 @@ import type {
   Knowledge,
   Role,
   Session,
+  StakeholderInteraction,
 } from "./types";
 
 type State = {
@@ -20,6 +21,7 @@ type State = {
   investigations: InvestigationRun[];
   assessments: AssessmentProjection;
   events: AuditEvent[];
+  interactions: StakeholderInteraction[];
   activeThread: string;
   lastSeen: Record<string, number>;
   streamingText: string;
@@ -37,7 +39,7 @@ type Action =
       type: "loaded";
       payload: Pick<
         State,
-        "session" | "roles" | "knowledge" | "investigations" | "assessments" | "events"
+        "session" | "roles" | "knowledge" | "investigations" | "assessments" | "events" | "interactions"
       >;
     }
   | { type: "thread"; threadId: string; sequence: number }
@@ -56,6 +58,7 @@ const initialState: State = {
   investigations: [],
   assessments: { history: [], current: [] },
   events: [],
+  interactions: [],
   activeThread: "channel:bridge",
   lastSeen: {},
   streamingText: "",
@@ -118,12 +121,13 @@ export function useSession(sessionId: string) {
   busyRef.current = state.busy || state.streamingRole !== "";
 
   const refresh = useCallback(async () => {
-    const [session, roles, events, investigations, assessments] = await Promise.all([
+    const [session, roles, events, investigations, assessments, interactions] = await Promise.all([
       api<Session>(`/sessions/${sessionId}`),
       api<Role[]>(`/sessions/${sessionId}/roles`),
       api<AuditEvent[]>(`/sessions/${sessionId}/events`),
       api<InvestigationRun[]>(`/sessions/${sessionId}/investigations`),
       api<AssessmentProjection>(`/sessions/${sessionId}/assessments`),
+      api<StakeholderInteraction[]>(`/sessions/${sessionId}/interactions`),
     ]);
     const pairs = await Promise.all(
       roles.map(async (role) => {
@@ -151,6 +155,7 @@ export function useSession(sessionId: string) {
         events,
         investigations,
         assessments,
+        interactions,
         knowledge: Object.fromEntries(pairs),
       },
     });
@@ -367,6 +372,18 @@ export function useSession(sessionId: string) {
     [refresh, run, sessionId],
   );
 
+  const respondToInteraction = useCallback(
+    (interactionId: string, message: string) =>
+      run(async () => {
+        await api(`/sessions/${sessionId}/interactions/${interactionId}/respond`, {
+          method: "POST",
+          body: JSON.stringify({ message }),
+        });
+        await refresh();
+      }),
+    [refresh, run, sessionId],
+  );
+
   const discoveredEvidence = useMemo(() => {
     const evidence = new Map<string, Evidence>();
     for (const [roleId, items] of Object.entries(state.knowledge)) {
@@ -394,6 +411,7 @@ export function useSession(sessionId: string) {
     shareEvidence,
     recordAssessment,
     recordDecision,
+    respondToInteraction,
     refresh,
   };
 }

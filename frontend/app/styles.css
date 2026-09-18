@@ -289,12 +289,44 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
 .nested-card > .danger-button { justify-self: end; }
 .key-value-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 9px; align-items: end; }
 .variant-card { gap: 18px; }
+.trigger-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(49, 68, 59, .75);
+  background: rgba(9, 18, 14, .65);
+}
+.trigger-children { display: grid; gap: 10px; }
+.trigger-child,
+.follow-up-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  background: rgba(5, 12, 9, .45);
+}
+.trigger-child > .trigger-editor,
+.follow-up-editor > .wide-field { grid-column: 1 / -1; }
+.trigger-child > .danger-button,
+.follow-up-editor > .danger-button { grid-column: 1 / -1; justify-self: end; }
+.effect-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) auto;
+  gap: 9px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+}
+.editor-caption { margin: 0; color: var(--muted); font-size: 11px; }
+
 
 @media (max-width: 800px) {
   .editor-heading, .editor-actions, .form-section-heading, .nested-heading { align-items: stretch; flex-direction: column; }
   .editor-actions > span { margin-right: 0; }
   .form-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .form-grid, .key-value-row, .reference-list { grid-template-columns: 1fr; }
+  .form-grid, .key-value-row, .reference-list, .trigger-editor, .trigger-child, .follow-up-editor, .effect-row { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
   .compact-button { align-self: stretch; }
 }
@@ -529,6 +561,34 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   color: #04100a;
   font: 700 9px "SFMono-Regular", Consolas, monospace;
 }
+.thread-empty {
+  margin: 0;
+  padding: 6px 16px;
+  color: #5f7069;
+  font-size: 11px;
+}
+.stakeholder-thread { align-items: flex-start; }
+.stakeholder-thread .thread-name { display: grid; gap: 2px; }
+.stakeholder-thread .thread-name small {
+  overflow: hidden;
+  color: #71817a;
+  font-size: 9px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+.request-mark {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(217, 164, 65, .35);
+  border-radius: 8px;
+  background: rgba(217, 164, 65, .1);
+  color: var(--amber);
+  font: 700 12px "SFMono-Regular", Consolas, monospace;
+}
+
 .rail-note {
   margin: 24px 12px 0;
   padding: 12px;
@@ -569,6 +629,22 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   letter-spacing: 0;
   text-transform: none;
 }
+.interaction-head > span:nth-child(2) { display: grid; gap: 1px; }
+.interaction-status {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  color: var(--muted);
+  font: 600 9px "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+.interaction-status.waiting_for_trainee {
+  border-color: rgba(217, 164, 65, .35);
+  color: var(--amber);
+}
+.interaction-status.resolved { color: var(--green); }
+
 .conversation-stream {
   display: flex;
   flex-direction: column;
@@ -578,6 +654,36 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   overflow-y: auto;
   scroll-behavior: smooth;
 }
+.interaction-context-note {
+  align-self: center;
+  max-width: 620px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(101, 240, 165, .035);
+  color: #71817a;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: center;
+}
+.interaction-exchange { display: contents; }
+.follow-up-label {
+  display: inline-block;
+  margin: 0 0 5px;
+  color: var(--amber);
+  font: 600 9px "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+.interaction-composer textarea { min-height: 68px; }
+.interaction-resolved {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+  background: #0d1714;
+  color: var(--green);
+  font-size: 11px;
+  text-align: center;
+}
+
 .conversation-empty {
   display: grid;
   max-width: 440px;

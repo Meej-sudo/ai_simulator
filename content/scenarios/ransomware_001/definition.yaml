@@ -235,31 +235,112 @@ investigations:
   repeatable: false
 events:
 - id: E001
-  at_minute: 5
-  role: soc
-  reveal_observations:
-  - O001
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 5
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O001
+  once: true
 - id: E002
-  at_minute: 10
-  role: soc
-  reveal_observations:
-  - O002
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 10
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O002
+  once: true
 - id: E003
-  at_minute: 20
-  role: soc
-  reveal_observations:
-  - O003
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 20
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O003
+  once: true
 - id: E004
-  at_minute: 40
-  role: ciso
-  reveal_observations:
-  - O001
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 40
+  effects:
+  - type: reveal_observation
+    role_id: ciso
+    observation_id: O001
+  once: true
 - id: E005
-  at_minute: 45
-  role: soc
-  reveal_observations:
-  - O004
-  - O005
+  type: reveal_evidence
+  trigger:
+    type: simulation_time
+    at_minute: 45
+  effects:
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O004
+  - type: reveal_observation
+    role_id: soc
+    observation_id: O005
+  once: true
+- id: E020
+  type: stakeholder_interaction
+  trigger:
+    type: assessment_exists
+    hypothesis_id: H002
+    minimum_confidence: medium
+  actor_role: ceo
+  interaction:
+    objective: Obtain a concise executive assessment of possible data exfiltration.
+    context:
+    - Senior leadership requires an update.
+    - Focus on business impact.
+    - Ask what is known versus suspected.
+    - Avoid unnecessary technical detail.
+  follow_ups:
+  - id: FU001
+    when:
+      trainee_assessment:
+        hypothesis_id: H002
+        confidence: confirmed
+      evidence_support:
+        below: confirmed
+        confirmation_evidence_ids:
+        - FD008
+    objective: Ask what evidence confirms the trainee's exfiltration statement.
+    context:
+    - Challenge unsupported certainty without deciding whether exfiltration occurred.
+  once: true
+- id: E021
+  type: stakeholder_interaction
+  trigger:
+    type: evidence_known
+    role_id: dpo
+    evidence_id: O004
+  actor_role: dpo
+  interaction:
+    objective: Determine what personal data may be affected and what remains unknown.
+    context:
+    - Separate possible exposure from a confirmed personal-data breach.
+    - Ask for scope, affected data, evidence quality, and unresolved gaps.
+  once: true
+- id: E022
+  type: stakeholder_interaction
+  trigger:
+    type: event_fired
+    event_id: E004
+  actor_role: ceo
+  interaction:
+    objective: Balance pressure to restore service with the SOC need to preserve evidence.
+    context:
+    - Operational disruption is creating pressure to restore affected services.
+    - The SOC needs enough time and system integrity to preserve useful evidence.
+    - Ask for a practical recommendation and tradeoffs; do not negotiate autonomously.
+  once: true
 scoring:
 - id: involve_dpo
   description: Involve the DPO promptly after the outbound-transfer observation.

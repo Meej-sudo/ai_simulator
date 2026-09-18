@@ -1,11 +1,12 @@
 "use client";
 
-import type { AuditEvent, Role } from "./types";
+import type { AuditEvent, Role, StakeholderInteraction } from "./types";
 import { eventThread, initials } from "./ui";
 
 type Props = {
   roles: Role[];
   events: AuditEvent[];
+  interactions: StakeholderInteraction[];
   activeThread: string;
   lastSeen: Record<string, number>;
   onSelect: (threadId: string) => void;
@@ -28,6 +29,7 @@ function unreadCount(
 export default function ThreadRail({
   roles,
   events,
+  interactions,
   activeThread,
   lastSeen,
   onSelect,
@@ -36,6 +38,33 @@ export default function ThreadRail({
 
   return (
     <nav className="thread-rail" aria-label="Exercise conversations">
+      <div className="thread-group stakeholder-requests">
+        <h3>Stakeholder requests</h3>
+        {interactions.length === 0 ? (
+          <p className="thread-empty">No requests yet</p>
+        ) : (
+          interactions.map((interaction) => {
+            const threadId = `interaction:${interaction.id}`;
+            const pending = interaction.status === "WAITING_FOR_TRAINEE";
+            return (
+              <button
+                className="thread-button stakeholder-thread"
+                aria-current={activeThread === threadId}
+                key={interaction.id}
+                onClick={() => onSelect(threadId)}
+              >
+                <span className="request-mark">!</span>
+                <span className="thread-name">
+                  {interaction.actor_display_name}
+                  <small>{pending ? "Response requested" : interaction.status === "RESOLVED" ? "Resolved" : "Responded"}</small>
+                </span>
+                {pending && <span className="unread-count">1</span>}
+              </button>
+            );
+          })
+        )}
+      </div>
+
       <div className="thread-group">
         <h3>Channels</h3>
         <button

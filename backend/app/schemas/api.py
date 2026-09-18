@@ -119,6 +119,10 @@ class DecisionRequest(BaseModel):
     rationale: str | None = Field(default=None, max_length=4000)
 
 
+class InteractionRespondRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
 class ActionAcceptedResponse(BaseModel):
     event_id: str
     simulation_time: int

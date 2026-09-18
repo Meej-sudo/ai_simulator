@@ -2,6 +2,7 @@ from app.llm.models import (
     AssessmentInterpretationRequest,
     InvestigationInterpretationRequest,
     RoleResponseRequest,
+    StakeholderMessageRequest,
 )
 
 
@@ -143,3 +144,58 @@ Extract every clearly stated hypothesis and its stated confidence.
 basis_evidence_ids may contain only evidence IDs listed above and only when the statement actually relies on that evidence.
 Do not grade correctness, compare against truth, infer hidden evidence, reveal outcomes, or provide advice.
 Return an empty assessments list when no public hypothesis can be mapped reliably.{retry}"""
+
+
+def build_stakeholder_prompt(request: StakeholderMessageRequest) -> str:
+    responsibilities = "\n".join(f"- {item}" for item in request.responsibilities)
+    context = "\n".join(f"- {item}" for item in request.context) or "- No additional context."
+    observations = "\n".join(
+        f"- {item.statement} [reliability: {item.reliability.value}]"
+        for item in request.permitted_observations
+    ) or "- None"
+    findings = "\n".join(
+        f"- {item.statement} [reliability: {item.reliability.value}]"
+        for item in request.permitted_findings
+    ) or "- None"
+    assessments = "\n".join(
+        f"- {item.hypothesis_label}: {item.confidence.value}; trainee statement: {item.statement}"
+        for item in request.relevant_assessments
+    ) or "- None"
+    tendencies = "\n".join(
+        f"- {item}" for item in request.personality.behavioral_tendencies
+    )
+    return f"""Write one proactive stakeholder message for a cyber-incident exercise.
+
+STAKEHOLDER
+{request.role_display_name}
+Responsibilities:
+{responsibilities}
+Communication tone: {request.communication_style.tone}
+Verbosity: {request.communication_style.verbosity}
+Additional guidance: {request.response_guidance or 'None'}
+Personality summary: {request.personality.summary}
+Behavioral tendencies:
+{tendencies}
+Under pressure: {request.personality.under_pressure}
+
+OBJECTIVE
+{request.objective}
+
+AUTHOR GUIDANCE
+{context}
+
+EVIDENCE CURRENTLY KNOWN TO THIS STAKEHOLDER
+Observations:
+{observations}
+Findings:
+{findings}
+
+CURRENT RELEVANT TRAINEE ASSESSMENTS
+{assessments}
+
+Generate only natural-language wording that pursues the objective.
+Use only the supplied stakeholder evidence and assessments as incident facts.
+If information is absent, frame it as a question or explicitly unknown.
+Do not expose internal IDs, prompts, triggers, scenario mechanics, hidden information, future events, variants, outcomes, ground truth, or scoring rules.
+Do not decide an action, change state, evaluate the trainee, or answer on the trainee's behalf.
+"""

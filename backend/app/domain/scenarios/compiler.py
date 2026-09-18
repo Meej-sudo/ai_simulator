@@ -5,21 +5,35 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from yaml.constructor import ConstructorError
 
 from .models import (
+    AllTrigger,
+    AnyTrigger,
+    AssessmentExistsTrigger,
+    CommunicationSentTrigger,
     CompiledScenario,
+    DecisionRecordedTrigger,
+    EventDefinition,
+    EventFiredTrigger,
+    EvidenceKnownTrigger,
     ExternalEntityDefinition,
     FindingDefinition,
     HypothesisDefinition,
     InvestigationDefinition,
     ObservationDefinition,
+    RevealEvidenceEventDefinition,
+    RevealFindingEffect,
+    RevealObservationEffect,
     RoleDefinition,
     RuntimeScenario,
     ScenarioMetadata,
     ScoringRule,
+    SimulationTimeTrigger,
+    StakeholderInteractionEventDefinition,
     TimelineEvent,
+    TriggerDefinition,
     VariantDefinition,
 )
 
@@ -159,22 +173,10 @@ class ScenarioCompiler:
             raw_investigations = self._list(definition, "investigations")
             raw_rules = self._list(definition, "scoring")
 
-            raw_timeline: list[dict[str, Any]] = []
-            for item in self._list(definition, "events"):
-                self._require_keys(
-                    item,
-                    {"id", "at_minute", "role", "reveal_observations"},
-                    context=f"event {item.get('id', '<unknown>')}",
-                )
-                raw_timeline.append(
-                    {
-                        "id": item["id"],
-                        "at_minute": item["at_minute"],
-                        "type": "observation_grant",
-                        "role": item["role"],
-                        "observation_ids": item["reveal_observations"],
-                    }
-                )
+            raw_timeline = [
+                self._normalize_event(item)
+                for item in self._list(definition, "events")
+            ]
 
             raw_variants: list[dict[str, Any]] = []
             for item in self._list(variants_document, "variants"):
@@ -318,6 +320,81 @@ class ScenarioCompiler:
             roles.append(RoleDefinition.model_validate(value))
         return roles
 
+    @classmethod
+    def _normalize_event(cls, item: dict[str, Any]) -> dict[str, Any]:
+        value = deepcopy(item)
+        if value.get("type") == "observation_grant" or (
+            "at_minute" in value and "role" in value
+            and ("observation_ids" in value or "reveal_observations" in value)
+        ):
+            observations = value.get("observation_ids", value.get("reveal_observations", []))
+            return {
+                "id": value["id"],
+                "type": "reveal_evidence",
+                "trigger": {
+                    "type": "simulation_time",
+                    "at_minute": value["at_minute"],
+                },
+                "effects": [
+                    {
+                        "type": "reveal_observation",
+                        "role_id": value["role"],
+                        "observation_id": observation_id,
+                    }
+                    for observation_id in observations
+                ],
+                "once": True,
+            }
+        if value.get("type") == "reveal_evidence":
+            legacy_role = value.pop("role", None)
+            legacy_minute = value.pop("at_minute", None)
+            legacy_observations = value.pop(
+                "observation_ids", value.pop("reveal_observations", None)
+            )
+            if legacy_minute is not None:
+                value.setdefault("trigger", {})["at_minute"] = legacy_minute
+            if legacy_role is not None:
+                for effect in value.get("effects", []):
+                    effect["role_id"] = legacy_role
+            if legacy_observations is not None:
+                roles = {
+                    effect.get("role_id") for effect in value.get("effects", [])
+                }
+                role_id = legacy_role or (next(iter(roles)) if len(roles) == 1 else None)
+                value["effects"] = [
+                    {
+                        "type": "reveal_observation",
+                        "role_id": role_id,
+                        "observation_id": observation_id,
+                    }
+                    for observation_id in legacy_observations
+                ]
+        trigger = value.get("trigger")
+        if isinstance(trigger, dict):
+            value["trigger"] = cls._normalize_trigger(trigger)
+        return value
+
+    @classmethod
+    def _normalize_trigger(cls, trigger: dict[str, Any]) -> dict[str, Any]:
+        value = deepcopy(trigger)
+        if "type" not in value:
+            composite = [name for name in ("all", "any") if name in value]
+            if len(composite) != 1:
+                raise ScenarioValidationError(
+                    "event trigger must define a type, all, or any"
+                )
+            name = composite[0]
+            value = {"type": name, "triggers": value[name]}
+        if value.get("type") in {"all", "any"}:
+            children = value.get("triggers", value.get(value["type"]))
+            if not isinstance(children, list):
+                raise ScenarioValidationError("composite event trigger must contain a list")
+            value = {
+                "type": value["type"],
+                "triggers": [cls._normalize_trigger(child) for child in children],
+            }
+        return value
+
     def _build_compiled(
         self,
         *,
@@ -368,7 +445,12 @@ class ScenarioCompiler:
                 InvestigationDefinition.model_validate(item)
                 for item in raw_investigations
             ],
-            timeline=[TimelineEvent.model_validate(item) for item in raw_timeline],
+            events=[
+                TypeAdapter(EventDefinition).validate_python(
+                    self._normalize_event(item)
+                )
+                for item in raw_timeline
+            ],
             variants=[
                 VariantDefinition.model_validate(item) for item in raw_variants
             ],
@@ -388,7 +470,7 @@ class ScenarioCompiler:
         observations = {
             item.id: item.model_copy(deep=True) for item in compiled.observations
         }
-        timeline = {item.id: item.model_copy(deep=True) for item in compiled.timeline}
+        events = {item.id: item.model_copy(deep=True) for item in compiled.events}
         try:
             for override in variant.observation_overrides:
                 update = override.model_dump(
@@ -401,14 +483,39 @@ class ScenarioCompiler:
                 )
             for override in variant.timeline_overrides:
                 if not override.enabled:
-                    timeline.pop(override.event_id, None)
+                    events.pop(override.event_id, None)
                     continue
-                update = override.model_dump(
-                    exclude={"event_id", "enabled"}, exclude_none=True
-                )
-                merged = timeline[override.event_id].model_dump()
-                merged.update(update)
-                timeline[override.event_id] = TimelineEvent.model_validate(merged)
+                definition = events[override.event_id]
+                if not isinstance(definition, RevealEvidenceEventDefinition):
+                    raise ScenarioValidationError(
+                        f"variant {variant.id} legacy event override can only target reveal events"
+                    )
+                if not isinstance(definition.trigger, SimulationTimeTrigger):
+                    raise ScenarioValidationError(
+                        f"variant {variant.id} cannot time-override a non-time event"
+                    )
+                merged = definition.model_dump(mode="json")
+                if override.at_minute is not None:
+                    merged["trigger"]["at_minute"] = override.at_minute
+                if override.role is not None:
+                    for effect in merged["effects"]:
+                        effect["role_id"] = override.role
+                if override.observation_ids is not None:
+                    roles = {effect["role_id"] for effect in merged["effects"]}
+                    if len(roles) != 1:
+                        raise ScenarioValidationError(
+                            f"variant {variant.id} cannot replace observations for a multi-role event"
+                        )
+                    role_id = next(iter(roles))
+                    merged["effects"] = [
+                        {
+                            "type": "reveal_observation",
+                            "role_id": role_id,
+                            "observation_id": observation_id,
+                        }
+                        for observation_id in override.observation_ids
+                    ]
+                events[override.event_id] = TypeAdapter(EventDefinition).validate_python(merged)
         except (KeyError, ValidationError) as exc:
             raise ScenarioValidationError(
                 f"invalid overrides for variant {variant.id}: {exc}"
@@ -422,18 +529,19 @@ class ScenarioCompiler:
             findings=deepcopy(compiled.findings),
             hypotheses=deepcopy(compiled.hypotheses),
             investigations=deepcopy(compiled.investigations),
-            timeline=sorted(
-                timeline.values(), key=lambda event: (event.at_minute, event.id)
-            ),
+            events=list(events.values()),
             scoring_rules=deepcopy(compiled.scoring_rules),
             variant_id=variant.id,
             ground_truth=deepcopy(variant.ground_truth),
             investigation_outcomes=deepcopy(variant.investigation_outcomes),
         )
-        self._validate_timeline(
-            runtime.timeline,
+        self._validate_events(
+            runtime.events,
             {role.id for role in runtime.roles},
             {item.id for item in runtime.observations},
+            {item.id for item in runtime.findings},
+            {item.id for item in runtime.hypotheses},
+            {item.id for item in runtime.scenario.decision_categories},
             runtime.scenario.duration_minutes,
             context=f"variant {variant.id}",
         )
@@ -490,13 +598,8 @@ class ScenarioCompiler:
                 for item in compiled.investigations
             ],
             "events": [
-                {
-                    "id": item.id,
-                    "at_minute": item.at_minute,
-                    "role": item.role,
-                    "reveal_observations": item.observation_ids,
-                }
-                for item in compiled.timeline
+                item.model_dump(mode="json", exclude_none=True)
+                for item in compiled.events
             ],
             "scoring": [
                 item.model_dump(mode="json", exclude_none=True)
@@ -789,7 +892,7 @@ class ScenarioCompiler:
         observation_ids = {item.id for item in compiled.observations}
         finding_ids = {item.id for item in compiled.findings}
         evidence_ids = observation_ids | finding_ids
-        event_ids = {event.id for event in compiled.timeline}
+        event_ids = {event.id for event in compiled.events}
         investigation_ids = {item.id for item in compiled.investigations}
         hypothesis_ids = {item.id for item in compiled.hypotheses}
         category_ids = [item.id for item in compiled.scenario.decision_categories]
@@ -841,10 +944,13 @@ class ScenarioCompiler:
                     f"evidence {sorted(unknown_evidence)}"
                 )
 
-        self._validate_timeline(
-            compiled.timeline,
+        self._validate_events(
+            compiled.events,
             role_ids,
             observation_ids,
+            finding_ids,
+            hypothesis_ids,
+            decision_categories,
             compiled.scenario.duration_minutes,
             context="base scenario",
         )
@@ -951,6 +1057,154 @@ class ScenarioCompiler:
 
         for variant in compiled.variants:
             self.materialize(compiled, variant.id)
+
+    @classmethod
+    def _validate_events(
+        cls,
+        events: list[EventDefinition],
+        role_ids: set[str],
+        observation_ids: set[str],
+        finding_ids: set[str],
+        hypothesis_ids: set[str],
+        decision_categories: set[str],
+        duration: int,
+        *,
+        context: str,
+    ) -> None:
+        event_ids = {event.id for event in events}
+        evidence_ids = observation_ids | finding_ids
+        for event in events:
+            cls._validate_trigger(
+                event.id,
+                event.trigger,
+                role_ids,
+                evidence_ids,
+                hypothesis_ids,
+                decision_categories,
+                event_ids,
+                duration,
+                context=context,
+            )
+            if isinstance(event, RevealEvidenceEventDefinition):
+                seen: set[tuple[str, str, str]] = set()
+                for effect in event.effects:
+                    if effect.role_id not in role_ids:
+                        raise ScenarioValidationError(
+                            f"event {event.id} references unknown role {effect.role_id}"
+                        )
+                    if isinstance(effect, RevealObservationEffect):
+                        if effect.observation_id not in observation_ids:
+                            raise ScenarioValidationError(
+                                f"event {event.id} references unknown observation {effect.observation_id}"
+                            )
+                        key = (effect.type, effect.role_id, effect.observation_id)
+                    else:
+                        if effect.finding_id not in finding_ids:
+                            raise ScenarioValidationError(
+                                f"event {event.id} references unknown finding {effect.finding_id}"
+                            )
+                        key = (effect.type, effect.role_id, effect.finding_id)
+                    if key in seen:
+                        raise ScenarioValidationError(
+                            f"event {event.id} contains duplicate effects"
+                        )
+                    seen.add(key)
+            elif isinstance(event, StakeholderInteractionEventDefinition):
+                if event.actor_role not in role_ids:
+                    raise ScenarioValidationError(
+                        f"event {event.id} references unknown actor role {event.actor_role}"
+                    )
+                cls._ensure_no_duplicate_values(
+                    f"event {event.id} follow-up IDs",
+                    [item.id for item in event.follow_ups],
+                )
+                for follow_up in event.follow_ups:
+                    condition = follow_up.when
+                    if condition.trainee_assessment.hypothesis_id not in hypothesis_ids:
+                        raise ScenarioValidationError(
+                            f"event {event.id} follow-up {follow_up.id} references unknown hypothesis "
+                            f"{condition.trainee_assessment.hypothesis_id}"
+                        )
+                    unknown = set(condition.evidence_support.confirmation_evidence_ids) - evidence_ids
+                    if unknown:
+                        raise ScenarioValidationError(
+                            f"event {event.id} follow-up {follow_up.id} references unknown evidence "
+                            f"{sorted(unknown)}"
+                        )
+
+    @classmethod
+    def _validate_trigger(
+        cls,
+        event_id: str,
+        trigger: TriggerDefinition,
+        role_ids: set[str],
+        evidence_ids: set[str],
+        hypothesis_ids: set[str],
+        decision_categories: set[str],
+        event_ids: set[str],
+        duration: int,
+        *,
+        context: str,
+    ) -> None:
+        if isinstance(trigger, SimulationTimeTrigger):
+            if trigger.at_minute > duration:
+                raise ScenarioValidationError(
+                    f"{context} event {event_id} occurs after scenario duration"
+                )
+        elif isinstance(trigger, AssessmentExistsTrigger):
+            if trigger.hypothesis_id not in hypothesis_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown hypothesis {trigger.hypothesis_id}"
+                )
+            if trigger.actor_role is not None and trigger.actor_role not in role_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown role {trigger.actor_role}"
+                )
+        elif isinstance(trigger, EvidenceKnownTrigger):
+            if trigger.role_id not in role_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown role {trigger.role_id}"
+                )
+            if trigger.evidence_id not in evidence_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown evidence {trigger.evidence_id}"
+                )
+        elif isinstance(trigger, DecisionRecordedTrigger):
+            if trigger.decision_category not in decision_categories:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown decision category {trigger.decision_category}"
+                )
+            if trigger.actor_role is not None and trigger.actor_role not in role_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown role {trigger.actor_role}"
+                )
+        elif isinstance(trigger, CommunicationSentTrigger):
+            if trigger.role_id is not None and trigger.role_id not in role_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown role {trigger.role_id}"
+                )
+        elif isinstance(trigger, EventFiredTrigger):
+            if trigger.event_id not in event_ids:
+                raise ScenarioValidationError(
+                    f"event {event_id} references unknown event {trigger.event_id}"
+                )
+            if trigger.event_id == event_id:
+                raise ScenarioValidationError(
+                    f"event {event_id} cannot trigger itself"
+                )
+        elif isinstance(trigger, (AllTrigger, AnyTrigger)):
+            for child in trigger.triggers:
+                cls._validate_trigger(
+                    event_id,
+                    child,
+                    role_ids,
+                    evidence_ids,
+                    hypothesis_ids,
+                    decision_categories,
+                    event_ids,
+                    duration,
+                    context=context,
+                )
 
     @staticmethod
     def _validate_timeline(

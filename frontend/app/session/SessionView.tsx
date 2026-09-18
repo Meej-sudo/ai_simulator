@@ -6,6 +6,7 @@ import { api } from "../api";
 import Composer from "./Composer";
 import ContextRail from "./ContextRail";
 import Conversation from "./Conversation";
+import InteractionConversation from "./InteractionConversation";
 import ThreadRail from "./ThreadRail";
 import TopBar from "./TopBar";
 import type { Completion, Evaluation, Scenario, Session } from "./types";
@@ -25,6 +26,11 @@ export default function SessionView({
   const controller = useSession(sessionId);
   const { state, discoveredEvidence } = controller;
   const [ending, setEnding] = useState(false);
+  const activeInteraction = state.activeThread.startsWith("interaction:")
+    ? state.interactions.find(
+        (item) => item.id === state.activeThread.slice("interaction:".length),
+      )
+    : undefined;
 
   async function endExercise() {
     if (
@@ -98,31 +104,42 @@ export default function SessionView({
         <ThreadRail
           activeThread={state.activeThread}
           events={state.events}
+          interactions={state.interactions}
           lastSeen={state.lastSeen}
           onSelect={controller.selectThread}
           roles={state.roles}
         />
         <main className="conversation-pane">
-          <Conversation
-            activeThread={state.activeThread}
-            events={state.events}
-            evidence={discoveredEvidence}
-            roles={state.roles}
-            streamingRole={state.streamingRole}
-            streamingText={state.streamingText}
-          />
-          <Composer
-            activeThread={state.activeThread}
-            busy={state.busy}
-            categories={scenario.decision_categories}
-            evidence={discoveredEvidence}
-            suggestions={state.suggestions}
-            onAssess={controller.recordAssessment}
-            onDecide={controller.recordDecision}
-            onInvestigate={controller.requestWork}
-            onMessage={controller.sendMessage}
-            roles={state.roles}
-          />
+          {activeInteraction ? (
+            <InteractionConversation
+              busy={state.busy}
+              interaction={activeInteraction}
+              onRespond={controller.respondToInteraction}
+            />
+          ) : (
+            <>
+              <Conversation
+                activeThread={state.activeThread}
+                events={state.events}
+                evidence={discoveredEvidence}
+                roles={state.roles}
+                streamingRole={state.streamingRole}
+                streamingText={state.streamingText}
+              />
+              <Composer
+                activeThread={state.activeThread}
+                busy={state.busy}
+                categories={scenario.decision_categories}
+                evidence={discoveredEvidence}
+                suggestions={state.suggestions}
+                onAssess={controller.recordAssessment}
+                onDecide={controller.recordDecision}
+                onInvestigate={controller.requestWork}
+                onMessage={controller.sendMessage}
+                roles={state.roles}
+              />
+            </>
+          )}
         </main>
         <ContextRail
           assessments={state.assessments}

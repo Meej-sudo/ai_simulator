@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.domain.evaluation.engine import EvaluationResult
 from app.domain.scenarios.compiler import ScenarioValidationError
-from app.domain.simulation.models import AssessmentProjection, InvestigationRun
+from app.domain.simulation.models import (
+    AssessmentProjection,
+    InvestigationRun,
+    StakeholderInteraction,
+)
 from app.llm.errors import LLMProviderError
 from app.schemas.api import (
     ActionAcceptedResponse,
@@ -27,6 +31,7 @@ from app.schemas.api import (
     HypothesisResponse,
     InvestigationRequest,
     InvestigationRequestResponse,
+    InteractionRespondRequest,
     KnowledgeResponse,
     LLMConfigurationResponse,
     LLMModelsResponse,
@@ -285,17 +290,17 @@ def get_session(session_id: str, service: SimulationService = Depends(get_servic
 
 
 @router.post("/sessions/{session_id}/start", response_model=SessionResponse)
-def start_session(session_id: str, service: SimulationService = Depends(get_service)):
-    return call(lambda: service.start(session_id))
+async def start_session(session_id: str, service: SimulationService = Depends(get_service)):
+    return await call_async(lambda: service.start_async(session_id))
 
 
 @router.post("/sessions/{session_id}/advance-time", response_model=SessionResponse)
-def advance_time(
+async def advance_time(
     session_id: str,
     body: AdvanceTimeRequest,
     service: SimulationService = Depends(get_service),
 ):
-    return call(lambda: service.advance_time(session_id, body.minutes))
+    return await call_async(lambda: service.advance_time_async(session_id, body.minutes))
 
 
 @router.post("/sessions/{session_id}/complete", response_model=SessionResponse)
@@ -373,13 +378,13 @@ async def ask_role(
     "/sessions/{session_id}/actions/share-evidence",
     response_model=ActionAcceptedResponse,
 )
-def share_evidence(
+async def share_evidence(
     session_id: str,
     body: ShareEvidenceRequest,
     service: SimulationService = Depends(get_service),
 ):
-    event = call(
-        lambda: service.share_evidence(
+    event = await call_async(
+        lambda: service.share_evidence_async(
             session_id,
             body.from_role,
             body.to_role,
@@ -467,14 +472,14 @@ async def ask_role_stream(
     "/sessions/{session_id}/threads/{thread_id:path}/messages",
     response_model=ActionAcceptedResponse,
 )
-def post_message(
+async def post_message(
     session_id: str,
     thread_id: str,
     body: PostMessageRequest,
     service: SimulationService = Depends(get_service),
 ):
-    event = call(
-        lambda: service.post_message(
+    event = await call_async(
+        lambda: service.post_message_async(
             session_id,
             thread_id,
             body.text,
@@ -492,13 +497,13 @@ def post_message(
     response_model=ActionAcceptedResponse,
     deprecated=True,
 )
-def share_fact(
+async def share_fact(
     session_id: str,
     body: ShareFactRequest,
     service: SimulationService = Depends(get_service),
 ):
-    event = call(
-        lambda: service.share_fact(
+    event = await call_async(
+        lambda: service.share_evidence_async(
             session_id,
             body.from_role,
             body.to_role,
@@ -586,13 +591,13 @@ def list_assessments(
     "/sessions/{session_id}/actions/decision",
     response_model=ActionAcceptedResponse,
 )
-def make_decision(
+async def make_decision(
     session_id: str,
     body: DecisionRequest,
     service: SimulationService = Depends(get_service),
 ):
-    event = call(
-        lambda: service.make_decision(
+    event = await call_async(
+        lambda: service.make_decision_async(
             session_id,
             body.actor_role,
             body.category,
@@ -604,6 +609,36 @@ def make_decision(
     return ActionAcceptedResponse(
         event_id=event.id,
         simulation_time=event.simulation_time,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/interactions",
+    response_model=list[StakeholderInteraction],
+)
+def list_interactions(
+    session_id: str,
+    service: SimulationService = Depends(get_service),
+):
+    return call(lambda: service.interactions(session_id))
+
+
+@router.post(
+    "/sessions/{session_id}/interactions/{interaction_id}/respond",
+    response_model=StakeholderInteraction,
+)
+async def respond_to_interaction(
+    session_id: str,
+    interaction_id: str,
+    body: InteractionRespondRequest,
+    service: SimulationService = Depends(get_service),
+):
+    return await call_async(
+        lambda: service.respond_to_interaction(
+            session_id,
+            interaction_id,
+            body.message,
+        )
     )
 
 

@@ -35,6 +35,12 @@ class EventType(StrEnum):
     EVIDENCE_SHARED = "EVIDENCE_SHARED"
     ASSESSMENT_RECORDED = "ASSESSMENT_RECORDED"
     ASSESSMENT_INTERPRETATION_FAILED = "ASSESSMENT_INTERPRETATION_FAILED"
+    EVENT_DEFINITION_FIRED = "EVENT_DEFINITION_FIRED"
+    STAKEHOLDER_INTERACTION_STARTED = "STAKEHOLDER_INTERACTION_STARTED"
+    STAKEHOLDER_MESSAGE_CREATED = "STAKEHOLDER_MESSAGE_CREATED"
+    TRAINEE_STAKEHOLDER_RESPONSE = "TRAINEE_STAKEHOLDER_RESPONSE"
+    STAKEHOLDER_FOLLOWUP_CREATED = "STAKEHOLDER_FOLLOWUP_CREATED"
+    STAKEHOLDER_INTERACTION_RESOLVED = "STAKEHOLDER_INTERACTION_RESOLVED"
 
 
 class InvestigationStatus(StrEnum):
@@ -90,3 +96,33 @@ class InvestigationRequestResult(BaseModel):
 class AssessmentProjection(BaseModel):
     history: list[AssessmentSnapshot]
     current: list[AssessmentSnapshot]
+
+
+class InteractionStatus(StrEnum):
+    WAITING_FOR_TRAINEE = "WAITING_FOR_TRAINEE"
+    RESPONDED = "RESPONDED"
+    RESOLVED = "RESOLVED"
+
+
+class InteractionMessage(BaseModel):
+    id: str
+    kind: str
+    message: str
+    simulation_time: int
+
+
+class InteractionResponse(BaseModel):
+    id: str
+    message: str
+    simulation_time: int
+
+
+class StakeholderInteraction(BaseModel):
+    id: str
+    event_definition_id: str
+    actor_role: str
+    actor_display_name: str
+    started_at: int
+    status: InteractionStatus
+    messages: list[InteractionMessage]
+    responses: list[InteractionResponse]

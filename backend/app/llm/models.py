@@ -125,3 +125,34 @@ class AssessmentInterpretation(BaseModel):
 class ValidatedAssessmentInterpretation(BaseModel):
     response: AssessmentInterpretation
     violations: list[dict[str, object]] = Field(default_factory=list)
+
+
+class StakeholderAssessmentContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis_id: str
+    hypothesis_label: str
+    confidence: Confidence
+    statement: str
+
+
+class StakeholderMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: str
+    role_display_name: str
+    responsibilities: list[str]
+    communication_style: CommunicationStyle
+    personality: PersonalityProfile
+    response_guidance: str | None = None
+    objective: str = Field(min_length=1)
+    context: list[str] = Field(default_factory=list)
+    permitted_observations: list[ObservationDefinition]
+    permitted_findings: list[FindingDefinition]
+    relevant_assessments: list[StakeholderAssessmentContext] = Field(default_factory=list)
+
+
+class StakeholderMessageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1)

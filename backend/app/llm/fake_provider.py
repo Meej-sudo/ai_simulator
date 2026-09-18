@@ -11,6 +11,8 @@ from .models import (
     ResponseCertainty,
     RoleResponse,
     RoleResponseRequest,
+    StakeholderMessageRequest,
+    StakeholderMessageResponse,
 )
 
 
@@ -41,6 +43,37 @@ class FakeLLMProvider:
             referenced_evidence_ids=[item.id for item in evidence],
             certainty=ResponseCertainty(reliability),
         )
+
+    async def generate_stakeholder_message(
+        self, request: StakeholderMessageRequest
+    ) -> StakeholderMessageResponse:
+        objective = request.objective.casefold()
+        if "what evidence" in objective or "confirm" in objective:
+            message = (
+                "You described this as confirmed. What evidence demonstrates that "
+                "the conclusion is confirmed rather than still suspected?"
+            )
+        elif "personal data" in objective:
+            message = (
+                "I need to assess our privacy exposure. What personal data may be "
+                "affected, and what remains unknown?"
+            )
+        elif "restore" in objective or "preserv" in objective:
+            message = (
+                "Service disruption is creating operational pressure. What can we "
+                "restore now without compromising the SOC's need to preserve evidence?"
+            )
+        elif "exfiltration" in objective or "executive" in objective:
+            message = (
+                "I need a concise executive update on possible data exfiltration. "
+                "What is known, what is suspected, and what is the business impact?"
+            )
+        else:
+            message = (
+                f"I need an update on this objective: {request.objective.strip()} "
+                "What is known, and what remains uncertain?"
+            )
+        return StakeholderMessageResponse(message=message)
 
     async def interpret_investigation(
         self, request: InvestigationInterpretationRequest

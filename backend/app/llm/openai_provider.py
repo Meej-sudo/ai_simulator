@@ -7,11 +7,14 @@ from .models import (
     InvestigationInterpretationRequest,
     RoleResponse,
     RoleResponseRequest,
+    StakeholderMessageRequest,
+    StakeholderMessageResponse,
 )
 from .prompts import (
     build_assessment_prompt,
     build_investigation_prompt,
     build_system_prompt,
+    build_stakeholder_prompt,
 )
 
 
@@ -39,6 +42,15 @@ class OpenAILLMProvider:
             build_system_prompt(request),
             request.trainee_question,
             RoleResponse,
+        )
+
+    async def generate_stakeholder_message(
+        self, request: StakeholderMessageRequest
+    ) -> StakeholderMessageResponse:
+        return await self._parse(
+            build_stakeholder_prompt(request),
+            request.objective,
+            StakeholderMessageResponse,
         )
 
     async def interpret_investigation(

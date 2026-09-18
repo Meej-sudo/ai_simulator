@@ -6,6 +6,8 @@ from .models import (
     InvestigationInterpretationRequest,
     RoleResponse,
     RoleResponseRequest,
+    StakeholderMessageRequest,
+    StakeholderMessageResponse,
 )
 
 
@@ -19,6 +21,11 @@ class UnconfiguredLLMProvider:
     """Rejects LLM prompts until an administrator selects an AI model."""
 
     async def generate_role_response(self, request: RoleResponseRequest) -> RoleResponse:
+        raise LLMProviderError(UNCONFIGURED_MESSAGE)
+
+    async def generate_stakeholder_message(
+        self, request: StakeholderMessageRequest
+    ) -> StakeholderMessageResponse:
         raise LLMProviderError(UNCONFIGURED_MESSAGE)
 
     async def interpret_investigation(

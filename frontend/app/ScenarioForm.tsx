@@ -4,11 +4,14 @@ import { useState } from "react";
 
 import type {
   Confidence,
+  EventDefinition,
   InvestigationDefinition,
+  RevealEffect,
   PersonalityProfile,
   ScenarioDocument,
   ScoringRule,
   ScoringRuleType,
+  TriggerDefinition,
 } from "./scenario-types";
 
 type Props = {
@@ -94,6 +97,16 @@ function scalar(value: string): unknown {
   return value;
 }
 
+function mapTrigger(
+  trigger: TriggerDefinition,
+  mapper: (trigger: TriggerDefinition) => TriggerDefinition,
+): TriggerDefinition {
+  const nested = trigger.type === "all" || trigger.type === "any"
+    ? { ...trigger, triggers: trigger.triggers.map((item) => mapTrigger(item, mapper)) }
+    : trigger;
+  return mapper(nested);
+}
+
 function renameEvidenceReferences(
   document: ScenarioDocument,
   previous: string,
@@ -109,10 +122,31 @@ function renameEvidenceReferences(
         any_evidence: item.prerequisites.any_evidence.map(rename),
       },
     })),
-    timeline: document.timeline.map((item) => ({
+    events: document.events.map((item) => ({
       ...item,
-      observation_ids: item.observation_ids.map(rename),
-    })),
+      trigger: mapTrigger(item.trigger, (trigger) =>
+        trigger.type === "evidence_known"
+          ? { ...trigger, evidence_id: rename(trigger.evidence_id) }
+          : trigger),
+      ...(item.type === "reveal_evidence"
+        ? {
+            effects: item.effects.map((effect) => effect.type === "reveal_observation"
+              ? { ...effect, observation_id: rename(effect.observation_id) }
+              : { ...effect, finding_id: rename(effect.finding_id) }),
+          }
+        : {
+            follow_ups: item.follow_ups.map((followUp) => ({
+              ...followUp,
+              when: {
+                ...followUp.when,
+                evidence_support: {
+                  ...followUp.when.evidence_support,
+                  confirmation_evidence_ids: followUp.when.evidence_support.confirmation_evidence_ids.map(rename),
+                },
+              },
+            })),
+          }),
+    })) as EventDefinition[],
     variants: document.variants.map((variant) => ({
       ...variant,
       observation_overrides: variant.observation_overrides.map((item) => ({
@@ -144,26 +178,35 @@ function renameRoleReferences(
   previous: string,
   next: string,
 ): ScenarioDocument {
+  const rename = (value: string | null) => value === previous ? next : value;
   return {
     ...document,
     investigations: document.investigations.map((item) => ({
       ...item,
-      performer_roles: item.performer_roles.map((id) => id === previous ? next : id),
+      performer_roles: item.performer_roles.map((id) => rename(id) ?? id),
     })),
-    timeline: document.timeline.map((item) => ({
+    events: document.events.map((item) => ({
       ...item,
-      role: item.role === previous ? next : item.role,
-    })),
+      trigger: mapTrigger(item.trigger, (trigger) => {
+        if (trigger.type === "evidence_known") return { ...trigger, role_id: rename(trigger.role_id) ?? trigger.role_id };
+        if (trigger.type === "assessment_exists" || trigger.type === "decision_recorded") return { ...trigger, actor_role: rename(trigger.actor_role) };
+        if (trigger.type === "communication_sent") return { ...trigger, role_id: rename(trigger.role_id) };
+        return trigger;
+      }),
+      ...(item.type === "reveal_evidence"
+        ? { effects: item.effects.map((effect) => ({ ...effect, role_id: rename(effect.role_id) ?? effect.role_id })) }
+        : { actor_role: rename(item.actor_role) ?? item.actor_role }),
+    })) as EventDefinition[],
     variants: document.variants.map((variant) => ({
       ...variant,
       timeline_overrides: variant.timeline_overrides.map((item) => ({
         ...item,
-        role: item.role === previous ? next : item.role,
+        role: rename(item.role),
       })),
     })),
     scoring_rules: document.scoring_rules.map((item) => ({
       ...item,
-      target_role: item.target_role === previous ? next : item.target_role,
+      target_role: rename(item.target_role),
     })),
   };
 }
@@ -281,6 +324,117 @@ function Heading({
   );
 }
 
+type SelectOption = { id: string; label: string };
+
+type TriggerEditorProps = {
+  trigger: TriggerDefinition;
+  roles: SelectOption[];
+  evidence: SelectOption[];
+  hypotheses: SelectOption[];
+  categories: SelectOption[];
+  eventIds: SelectOption[];
+  onChange: (trigger: TriggerDefinition) => void;
+};
+
+function newTrigger(type: TriggerDefinition["type"], props: TriggerEditorProps): TriggerDefinition {
+  if (type === "simulation_time") return { type, at_minute: 0 };
+  if (type === "assessment_exists") return {
+    type,
+    hypothesis_id: props.hypotheses[0]?.id ?? "",
+    minimum_confidence: "medium",
+    actor_role: null,
+  };
+  if (type === "evidence_known") return {
+    type,
+    role_id: props.roles[0]?.id ?? "",
+    evidence_id: props.evidence[0]?.id ?? "",
+  };
+  if (type === "decision_recorded") return {
+    type,
+    decision_category: props.categories[0]?.id ?? "",
+    actor_role: null,
+    minimum_confidence: null,
+  };
+  if (type === "communication_sent") return {
+    type,
+    role_id: null,
+    thread_id: "channel:bridge",
+  };
+  if (type === "event_fired") return {
+    type,
+    event_id: props.eventIds[0]?.id ?? "",
+  };
+  return { type, triggers: [{ type: "simulation_time", at_minute: 0 }] };
+}
+
+function TriggerEditor(props: TriggerEditorProps) {
+  const { trigger, roles, evidence, hypotheses, categories, eventIds, onChange } = props;
+  return (
+    <div className="trigger-editor">
+      <label>
+        Trigger
+        <select
+          value={trigger.type}
+          onChange={(event) => onChange(newTrigger(event.target.value as TriggerDefinition["type"], props))}
+        >
+          <option value="simulation_time">Simulation time</option>
+          <option value="assessment_exists">Assessment exists</option>
+          <option value="evidence_known">Evidence known</option>
+          <option value="decision_recorded">Decision recorded</option>
+          <option value="communication_sent">Communication sent</option>
+          <option value="event_fired">Event fired</option>
+          <option value="all">All conditions</option>
+          <option value="any">Any condition</option>
+        </select>
+      </label>
+
+      {trigger.type === "simulation_time" && (
+        <Field label="Minute" type="number" value={trigger.at_minute} onChange={(value) => onChange({ ...trigger, at_minute: Math.max(0, Number(value)) })} />
+      )}
+      {trigger.type === "assessment_exists" && (
+        <>
+          <label>Hypothesis<select value={trigger.hypothesis_id} onChange={(event) => onChange({ ...trigger, hypothesis_id: event.target.value })}>{hypotheses.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>Minimum confidence<select value={trigger.minimum_confidence} onChange={(event) => onChange({ ...trigger, minimum_confidence: event.target.value as Confidence })}>{confidenceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label>Acting role (optional)<select value={trigger.actor_role ?? ""} onChange={(event) => onChange({ ...trigger, actor_role: event.target.value || null })}><option value="">Any role</option>{roles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        </>
+      )}
+      {trigger.type === "evidence_known" && (
+        <>
+          <label>Role that knows it<select value={trigger.role_id} onChange={(event) => onChange({ ...trigger, role_id: event.target.value })}>{roles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>Evidence<select value={trigger.evidence_id} onChange={(event) => onChange({ ...trigger, evidence_id: event.target.value })}>{evidence.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        </>
+      )}
+      {trigger.type === "decision_recorded" && (
+        <>
+          <label>Decision category<select value={trigger.decision_category} onChange={(event) => onChange({ ...trigger, decision_category: event.target.value })}>{categories.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>Acting role (optional)<select value={trigger.actor_role ?? ""} onChange={(event) => onChange({ ...trigger, actor_role: event.target.value || null })}><option value="">Any role</option>{roles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>Minimum confidence (optional)<select value={trigger.minimum_confidence ?? ""} onChange={(event) => onChange({ ...trigger, minimum_confidence: (event.target.value || null) as Confidence | null })}><option value="">Not required</option>{confidenceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        </>
+      )}
+      {trigger.type === "communication_sent" && (
+        <>
+          <label>Related role (optional)<select value={trigger.role_id ?? ""} onChange={(event) => onChange({ ...trigger, role_id: event.target.value || null })}><option value="">Any role</option>{roles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <Field label="Thread ID (optional)" value={trigger.thread_id ?? ""} onChange={(value) => onChange({ ...trigger, thread_id: value || null })} />
+        </>
+      )}
+      {trigger.type === "event_fired" && (
+        <label>Authored event<select value={trigger.event_id} onChange={(event) => onChange({ ...trigger, event_id: event.target.value })}>{eventIds.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      )}
+      {(trigger.type === "all" || trigger.type === "any") && (
+        <div className="trigger-children wide-field">
+          <div className="nested-heading"><span>{trigger.type === "all" ? "Every condition must match" : "At least one condition must match"}</span><button type="button" className="small-button" onClick={() => onChange({ ...trigger, triggers: [...trigger.triggers, { type: "simulation_time", at_minute: 0 }] })}>Add condition</button></div>
+          {trigger.triggers.map((child, index) => (
+            <div className="trigger-child" key={index}>
+              <TriggerEditor {...props} trigger={child} onChange={(next) => onChange({ ...trigger, triggers: replaceAt(trigger.triggers, index, next) })} />
+              {trigger.triggers.length > 1 && <button type="button" className="danger-button" onClick={() => onChange({ ...trigger, triggers: removeAt(trigger.triggers, index) })}>Remove condition</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ScenarioForm({ document, onChange }: Props) {
   const [section, setSection] = useState<Section>("scenario");
   const roles = document.roles.map((item) => ({ id: item.id, label: item.display_name }));
@@ -308,7 +462,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
     { id: "evidence", label: "Evidence", count: evidence.length },
     { id: "hypotheses", label: "Hypotheses", count: hypotheses.length },
     { id: "investigations", label: "Investigations", count: document.investigations.length },
-    { id: "timeline", label: "Events", count: document.timeline.length },
+    { id: "timeline", label: "Events", count: document.events.length },
     { id: "variants", label: "Variants", count: document.variants.length },
     { id: "scoring", label: "Scoring", count: document.scoring_rules.length },
   ];
@@ -432,6 +586,13 @@ export default function ScenarioForm({ document, onChange }: Props) {
                         ? value
                         : rule.decision_category,
                     })),
+                    events: document.events.map((authoredEvent) => ({
+                      ...authoredEvent,
+                      trigger: mapTrigger(authoredEvent.trigger, (trigger) =>
+                        trigger.type === "decision_recorded" && trigger.decision_category === item.id
+                          ? { ...trigger, decision_category: value }
+                          : trigger),
+                    })) as EventDefinition[],
                   })} />
                   <Field label="Display name" value={item.display_name} onChange={(value) => onChange({
                     ...document,
@@ -839,6 +1000,29 @@ export default function ScenarioForm({ document, onChange }: Props) {
                       ...rule,
                       hypothesis_id: rule.hypothesis_id === item.id ? value : rule.hypothesis_id,
                     })),
+                    events: document.events.map((authoredEvent) => ({
+                      ...authoredEvent,
+                      trigger: mapTrigger(authoredEvent.trigger, (trigger) =>
+                        trigger.type === "assessment_exists" && trigger.hypothesis_id === item.id
+                          ? { ...trigger, hypothesis_id: value }
+                          : trigger),
+                      ...(authoredEvent.type === "stakeholder_interaction"
+                        ? {
+                            follow_ups: authoredEvent.follow_ups.map((followUp) => ({
+                              ...followUp,
+                              when: {
+                                ...followUp.when,
+                                trainee_assessment: {
+                                  ...followUp.when.trainee_assessment,
+                                  hypothesis_id: followUp.when.trainee_assessment.hypothesis_id === item.id
+                                    ? value
+                                    : followUp.when.trainee_assessment.hypothesis_id,
+                                },
+                              },
+                            })),
+                          }
+                        : {}),
+                    })) as EventDefinition[],
                   })} />
                   <Field label="Key" value={item.key} onChange={(value) => onChange({
                     ...document,
@@ -1005,80 +1189,191 @@ export default function ScenarioForm({ document, onChange }: Props) {
       {section === "timeline" && (
         <section className="form-section">
           <Heading
-            title="Observation events"
-            description="Schedule when a role receives one or more ambiguous observations."
+            title="Authored events"
+            description="Define deterministic triggers. Reveal events change knowledge; stakeholder events ask the trainee for a response. The model only writes stakeholder wording."
             addLabel="Add event"
             onAdd={() => {
               if (!document.roles[0] || !document.observations[0]) return;
               onChange({
                 ...document,
-                timeline: [
-                  ...document.timeline,
+                events: [
+                  ...document.events,
                   {
-                    id: nextId("E", document.timeline.map((item) => item.id)),
-                    at_minute: 0,
-                    type: "observation_grant",
-                    role: document.roles[0].id,
-                    observation_ids: [document.observations[0].id],
+                    id: nextId("E", document.events.map((item) => item.id)),
+                    type: "reveal_evidence",
+                    trigger: { type: "simulation_time", at_minute: 0 },
+                    effects: [{
+                      type: "reveal_observation",
+                      role_id: document.roles[0].id,
+                      observation_id: document.observations[0].id,
+                    }],
+                    once: true,
                   },
                 ],
               });
             }}
           />
           <div className="form-card-list">
-            {document.timeline.map((item, index) => (
-              <article className="form-card" key={`${item.id}-${index}`}>
-                <div className="form-card-heading">
-                  <strong>{item.id} at T+{item.at_minute}</strong>
-                  <button type="button" className="danger-button" onClick={() => onChange({
-                    ...document,
-                    timeline: removeAt(document.timeline, index),
-                  })}>Remove</button>
-                </div>
-                <div className="form-grid">
-                  <Field label="ID" value={item.id} onChange={(value) => onChange({
-                    ...document,
-                    timeline: replaceAt(document.timeline, index, { ...item, id: value }),
-                    variants: document.variants.map((variant) => ({
-                      ...variant,
-                      timeline_overrides: variant.timeline_overrides.map((override) => ({
-                        ...override,
-                        event_id: override.event_id === item.id ? value : override.event_id,
+            {document.events.map((item, index) => {
+              const updateEvent = (next: EventDefinition) => onChange({
+                ...document,
+                events: replaceAt(document.events, index, next),
+              });
+              const eventIds = document.events
+                .filter((candidate) => candidate.id !== item.id)
+                .map((candidate) => ({ id: candidate.id, label: candidate.id }));
+              return (
+                <article className="form-card event-card" key={`${item.id}-${index}`}>
+                  <div className="form-card-heading">
+                    <strong>{item.id} · {item.type === "reveal_evidence" ? "Reveal evidence" : "Stakeholder interaction"}</strong>
+                    <button type="button" className="danger-button" onClick={() => onChange({
+                      ...document,
+                      events: removeAt(document.events, index),
+                    })}>Remove</button>
+                  </div>
+                  <div className="form-grid">
+                    <Field label="ID" value={item.id} onChange={(value) => onChange({
+                      ...document,
+                      events: document.events.map((candidate, candidateIndex) => ({
+                        ...candidate,
+                        id: candidateIndex === index ? value : candidate.id,
+                        trigger: mapTrigger(candidate.trigger, (trigger) =>
+                          trigger.type === "event_fired" && trigger.event_id === item.id
+                            ? { ...trigger, event_id: value }
+                            : trigger),
+                      })) as EventDefinition[],
+                      variants: document.variants.map((variant) => ({
+                        ...variant,
+                        timeline_overrides: variant.timeline_overrides.map((override) => ({
+                          ...override,
+                          event_id: override.event_id === item.id ? value : override.event_id,
+                        })),
                       })),
-                    })),
-                  })} />
-                  <Field label="Minute" type="number" value={item.at_minute} onChange={(value) => onChange({
-                    ...document,
-                    timeline: replaceAt(document.timeline, index, {
-                      ...item,
-                      at_minute: Math.max(0, Number(value)),
-                    }),
-                  })} />
-                  <label>
-                    Recipient role
-                    <select value={item.role} onChange={(event) => onChange({
-                      ...document,
-                      timeline: replaceAt(document.timeline, index, { ...item, role: event.target.value }),
-                    })}>
-                      {roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}
-                    </select>
-                  </label>
-                  <MultiSelect
-                    label="Observations revealed"
-                    options={observations}
-                    selected={item.observation_ids}
-                    onChange={(selected) => onChange({
-                      ...document,
-                      timeline: replaceAt(document.timeline, index, {
-                        ...item,
-                        observation_ids: selected,
-                      }),
-                    })}
-                    empty="Create observations first."
-                  />
-                </div>
-              </article>
-            ))}
+                    })} />
+                    <label>
+                      Event kind
+                      <select value={item.type} onChange={(event) => {
+                        if (event.target.value === item.type) return;
+                        if (event.target.value === "stakeholder_interaction") {
+                          updateEvent({
+                            id: item.id,
+                            type: "stakeholder_interaction",
+                            trigger: item.trigger,
+                            actor_role: document.roles[0]?.id ?? "",
+                            interaction: { objective: "Request an incident update.", context: [] },
+                            follow_ups: [],
+                            once: item.once,
+                          });
+                        } else {
+                          updateEvent({
+                            id: item.id,
+                            type: "reveal_evidence",
+                            trigger: item.trigger,
+                            effects: [{
+                              type: "reveal_observation",
+                              role_id: document.roles[0]?.id ?? "",
+                              observation_id: document.observations[0]?.id ?? "",
+                            }],
+                            once: item.once,
+                          });
+                        }
+                      }}>
+                        <option value="reveal_evidence">Reveal evidence</option>
+                        <option value="stakeholder_interaction">Stakeholder interaction</option>
+                      </select>
+                    </label>
+                    <label className="check-field">
+                      <input type="checkbox" checked={item.once} onChange={(event) => updateEvent({ ...item, once: event.target.checked })} />
+                      Fire only once
+                    </label>
+                    <div className="wide-field">
+                      <TriggerEditor
+                        trigger={item.trigger}
+                        roles={roles}
+                        evidence={evidence}
+                        hypotheses={hypotheses}
+                        categories={categories}
+                        eventIds={eventIds}
+                        onChange={(trigger) => updateEvent({ ...item, trigger })}
+                      />
+                    </div>
+
+                    {item.type === "reveal_evidence" ? (
+                      <div className="wide-field nested-editor">
+                        <div className="nested-heading">
+                          <span>Knowledge effects</span>
+                          <button type="button" className="small-button" disabled={!document.roles[0] || !document.observations[0]} onClick={() => updateEvent({
+                            ...item,
+                            effects: [...item.effects, {
+                              type: "reveal_observation",
+                              role_id: document.roles[0]?.id ?? "",
+                              observation_id: document.observations[0]?.id ?? "",
+                            }],
+                          })}>Add effect</button>
+                        </div>
+                        {item.effects.map((effect, effectIndex) => (
+                          <div className="effect-row" key={effectIndex}>
+                            <label>Effect<select value={effect.type} onChange={(event) => {
+                              const next: RevealEffect = event.target.value === "reveal_finding"
+                                ? { type: "reveal_finding", role_id: effect.role_id, finding_id: document.findings[0]?.id ?? "" }
+                                : { type: "reveal_observation", role_id: effect.role_id, observation_id: document.observations[0]?.id ?? "" };
+                              updateEvent({ ...item, effects: replaceAt(item.effects, effectIndex, next) });
+                            }}><option value="reveal_observation">Reveal observation</option><option value="reveal_finding">Reveal finding</option></select></label>
+                            <label>Recipient role<select value={effect.role_id} onChange={(event) => updateEvent({ ...item, effects: replaceAt(item.effects, effectIndex, { ...effect, role_id: event.target.value }) })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>
+                            <label>Evidence<select value={effect.type === "reveal_observation" ? effect.observation_id : effect.finding_id} onChange={(event) => {
+                              const next: RevealEffect = effect.type === "reveal_observation"
+                                ? { ...effect, observation_id: event.target.value }
+                                : { ...effect, finding_id: event.target.value };
+                              updateEvent({ ...item, effects: replaceAt(item.effects, effectIndex, next) });
+                            }}>{(effect.type === "reveal_observation" ? observations : findings).map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                            {item.effects.length > 1 && <button type="button" className="danger-button" onClick={() => updateEvent({ ...item, effects: removeAt(item.effects, effectIndex) })}>Remove</button>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <label>Stakeholder<select value={item.actor_role} onChange={(event) => updateEvent({ ...item, actor_role: event.target.value })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>
+                        <TextField label="Interaction objective" value={item.interaction.objective} onChange={(value) => updateEvent({ ...item, interaction: { ...item.interaction, objective: value } })} help="Describe what the stakeholder needs. The model turns this into natural language." />
+                        <TextField label="Context (one instruction per line)" value={item.interaction.context.join("\n")} onChange={(value) => updateEvent({ ...item, interaction: { ...item.interaction, context: lines(value) } })} />
+                        <div className="wide-field nested-editor">
+                          <div className="nested-heading">
+                            <span>Deterministic follow-ups</span>
+                            <button type="button" className="small-button" disabled={!document.hypotheses[0] || evidence.length === 0} onClick={() => updateEvent({
+                              ...item,
+                              follow_ups: [...item.follow_ups, {
+                                id: nextId("FU", item.follow_ups.map((followUp) => followUp.id)),
+                                when: {
+                                  trainee_assessment: { hypothesis_id: document.hypotheses[0]?.id ?? "", confidence: "confirmed" },
+                                  evidence_support: { below: "confirmed", confirmation_evidence_ids: [evidence[0]?.id ?? ""] },
+                                },
+                                objective: "Ask what evidence supports the trainee's statement.",
+                                context: [],
+                              }],
+                            })}>Add follow-up</button>
+                          </div>
+                          {item.follow_ups.length === 0 && <p className="editor-caption">No follow-up. The first trainee response will resolve this request.</p>}
+                          {item.follow_ups.map((followUp, followUpIndex) => {
+                            const updateFollowUp = (next: typeof followUp) => updateEvent({ ...item, follow_ups: replaceAt(item.follow_ups, followUpIndex, next) });
+                            return (
+                              <div className="follow-up-editor" key={`${followUp.id}-${followUpIndex}`}>
+                                <Field label="Follow-up ID" value={followUp.id} onChange={(value) => updateFollowUp({ ...followUp, id: value })} />
+                                <label>Claimed hypothesis<select value={followUp.when.trainee_assessment.hypothesis_id} onChange={(event) => updateFollowUp({ ...followUp, when: { ...followUp.when, trainee_assessment: { ...followUp.when.trainee_assessment, hypothesis_id: event.target.value } } })}>{hypotheses.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                                <label>Claimed confidence<select value={followUp.when.trainee_assessment.confidence} onChange={(event) => updateFollowUp({ ...followUp, when: { ...followUp.when, trainee_assessment: { ...followUp.when.trainee_assessment, confidence: event.target.value as Confidence } } })}>{confidenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+                                <label>Evidence support below<select value={followUp.when.evidence_support.below} onChange={(event) => updateFollowUp({ ...followUp, when: { ...followUp.when, evidence_support: { ...followUp.when.evidence_support, below: event.target.value as Confidence } } })}>{confidenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+                                <MultiSelect label="Confirmation evidence" options={evidence} selected={followUp.when.evidence_support.confirmation_evidence_ids} onChange={(selected) => updateFollowUp({ ...followUp, when: { ...followUp.when, evidence_support: { ...followUp.when.evidence_support, confirmation_evidence_ids: selected } } })} empty="Create evidence first." />
+                                <TextField label="Follow-up objective" value={followUp.objective} onChange={(value) => updateFollowUp({ ...followUp, objective: value })} />
+                                <TextField label="Follow-up context (one instruction per line)" value={followUp.context.join("\n")} onChange={(value) => updateFollowUp({ ...followUp, context: lines(value) })} />
+                                <button type="button" className="danger-button" onClick={() => updateEvent({ ...item, follow_ups: removeAt(item.follow_ups, followUpIndex) })}>Remove follow-up</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </section>
       )}

@@ -95,6 +95,30 @@ export type AuditEvent = {
   payload: Record<string, unknown>;
 };
 
+export type InteractionMessage = {
+  id: string;
+  kind: "stakeholder" | "follow_up";
+  message: string;
+  simulation_time: number;
+};
+
+export type InteractionResponse = {
+  id: string;
+  message: string;
+  simulation_time: number;
+};
+
+export type StakeholderInteraction = {
+  id: string;
+  event_definition_id: string;
+  actor_role: string;
+  actor_display_name: string;
+  started_at: number;
+  status: "WAITING_FOR_TRAINEE" | "RESPONDED" | "RESOLVED";
+  messages: InteractionMessage[];
+  responses: InteractionResponse[];
+};
+
 export type EvaluationRule = {
   rule_id: string;
   description: string;

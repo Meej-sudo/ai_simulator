@@ -414,6 +414,8 @@ GET  /sessions/{id}/assessments
 
 POST /sessions/{id}/actions/share-evidence
 POST /sessions/{id}/actions/decision
+GET  /sessions/{id}/interactions
+POST /sessions/{id}/interactions/{interaction_id}/respond
 GET  /sessions/{id}/events
 GET  /sessions/{id}/evaluation
 ```
@@ -447,9 +449,37 @@ uses forms rather than raw YAML. Sprint 1 sections cover:
 - observations and findings
 - public hypotheses
 - investigations, matching phrases, performers, prerequisites, and duration
-- observation event grants
+- generic deterministic event triggers, evidence effects, stakeholder objectives, and follow-ups
 - hidden ground truth and per-variant investigation outcomes
 - migrated scoring rules
+
+Events are strongly typed and deterministic. Supported triggers are
+`simulation_time`, `assessment_exists`, `evidence_known`, `decision_recorded`,
+`communication_sent`, `event_fired`, `all`, and `any`. Reveal events apply typed
+knowledge effects; stakeholder events select an actor role and an authored
+objective. The configured model only turns that objective into wording using the
+actor's current knowledge. It never decides whether an event fires.
+
+```yaml
+events:
+  - id: E020
+    type: stakeholder_interaction
+    trigger:
+      type: assessment_exists
+      hypothesis_id: H002
+      minimum_confidence: medium
+    actor_role: ceo
+    interaction:
+      objective: Obtain a concise executive assessment of possible data exfiltration.
+      context:
+        - Ask what is known versus suspected.
+    once: true
+```
+
+Stakeholder requests appear in the incident-room rail. The external trainee can
+open them, answer in free text, receive an authored deterministic follow-up, and
+see when the interaction is resolved. Responses and their contemporaneous
+knowledge snapshots are retained in the append-only event log but are not scored.
 
 The complete document is staged and compiled before any live file is changed.
 A failed validation leaves both files and the loaded registry unchanged.

@@ -80,13 +80,92 @@ export type InvestigationDefinition = {
   repeatable: boolean;
 };
 
-export type TimelineEvent = {
-  id: string;
+export type SimulationTimeTrigger = {
+  type: "simulation_time";
   at_minute: number;
-  type: "observation_grant";
-  role: string;
-  observation_ids: string[];
 };
+
+export type AssessmentExistsTrigger = {
+  type: "assessment_exists";
+  hypothesis_id: string;
+  minimum_confidence: Confidence;
+  actor_role: string | null;
+};
+
+export type EvidenceKnownTrigger = {
+  type: "evidence_known";
+  role_id: string;
+  evidence_id: string;
+};
+
+export type DecisionRecordedTrigger = {
+  type: "decision_recorded";
+  decision_category: string;
+  actor_role: string | null;
+  minimum_confidence: Confidence | null;
+};
+
+export type CommunicationSentTrigger = {
+  type: "communication_sent";
+  role_id: string | null;
+  thread_id: string | null;
+};
+
+export type EventFiredTrigger = {
+  type: "event_fired";
+  event_id: string;
+};
+
+export type CompositeTrigger = {
+  type: "all" | "any";
+  triggers: TriggerDefinition[];
+};
+
+export type TriggerDefinition =
+  | SimulationTimeTrigger
+  | AssessmentExistsTrigger
+  | EvidenceKnownTrigger
+  | DecisionRecordedTrigger
+  | CommunicationSentTrigger
+  | EventFiredTrigger
+  | CompositeTrigger;
+
+export type RevealEffect =
+  | { type: "reveal_observation"; role_id: string; observation_id: string }
+  | { type: "reveal_finding"; role_id: string; finding_id: string };
+
+export type StakeholderFollowUp = {
+  id: string;
+  when: {
+    trainee_assessment: { hypothesis_id: string; confidence: Confidence };
+    evidence_support: {
+      below: Confidence;
+      confirmation_evidence_ids: string[];
+    };
+  };
+  objective: string;
+  context: string[];
+};
+
+export type RevealEvidenceEvent = {
+  id: string;
+  type: "reveal_evidence";
+  trigger: TriggerDefinition;
+  effects: RevealEffect[];
+  once: boolean;
+};
+
+export type StakeholderInteractionEvent = {
+  id: string;
+  type: "stakeholder_interaction";
+  trigger: TriggerDefinition;
+  actor_role: string;
+  interaction: { objective: string; context: string[] };
+  follow_ups: StakeholderFollowUp[];
+  once: boolean;
+};
+
+export type EventDefinition = RevealEvidenceEvent | StakeholderInteractionEvent;
 
 export type ObservationOverride = {
   observation_id: string;
@@ -145,7 +224,7 @@ export type ScenarioDocument = {
   findings: FindingDefinition[];
   hypotheses: HypothesisDefinition[];
   investigations: InvestigationDefinition[];
-  timeline: TimelineEvent[];
+  events: EventDefinition[];
   variants: VariantDefinition[];
   scoring_rules: ScoringRule[];
 };

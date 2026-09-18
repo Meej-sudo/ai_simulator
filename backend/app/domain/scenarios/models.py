@@ -143,6 +143,201 @@ class TimelineEvent(StrictModel):
     observation_ids: list[EvidenceIdentifier] = Field(min_length=1)
 
 
+class SimulationTimeTrigger(StrictModel):
+    type: Literal["simulation_time"]
+    at_minute: int = Field(ge=0)
+
+
+class AssessmentExistsTrigger(StrictModel):
+    type: Literal["assessment_exists"]
+    hypothesis_id: str = Field(min_length=1, pattern=r"^H[0-9]+$")
+    minimum_confidence: Confidence = Confidence.LOW
+    actor_role: str | None = None
+
+
+class EvidenceKnownTrigger(StrictModel):
+    type: Literal["evidence_known"]
+    role_id: str
+    evidence_id: EvidenceIdentifier
+
+
+class DecisionRecordedTrigger(StrictModel):
+    type: Literal["decision_recorded"]
+    decision_category: str
+    actor_role: str | None = None
+    minimum_confidence: Confidence | None = None
+
+
+class CommunicationSentTrigger(StrictModel):
+    type: Literal["communication_sent"]
+    role_id: str | None = None
+    thread_id: str | None = None
+
+    @model_validator(mode="after")
+    def require_scope(self) -> "CommunicationSentTrigger":
+        if self.role_id is None and self.thread_id is None:
+            raise ValueError("communication_sent requires role_id or thread_id")
+        return self
+
+
+class EventFiredTrigger(StrictModel):
+    type: Literal["event_fired"]
+    event_id: str
+
+
+class AllTrigger(StrictModel):
+    type: Literal["all"]
+    triggers: list["TriggerDefinition"] = Field(min_length=1)
+
+
+class AnyTrigger(StrictModel):
+    type: Literal["any"]
+    triggers: list["TriggerDefinition"] = Field(min_length=1)
+
+
+TriggerDefinition = Annotated[
+    SimulationTimeTrigger
+    | AssessmentExistsTrigger
+    | EvidenceKnownTrigger
+    | DecisionRecordedTrigger
+    | CommunicationSentTrigger
+    | EventFiredTrigger
+    | AllTrigger
+    | AnyTrigger,
+    Field(discriminator="type"),
+]
+
+
+class RevealObservationEffect(StrictModel):
+    type: Literal["reveal_observation"]
+    role_id: str
+    observation_id: EvidenceIdentifier
+
+
+class RevealFindingEffect(StrictModel):
+    type: Literal["reveal_finding"]
+    role_id: str
+    finding_id: EvidenceIdentifier
+
+
+EventEffect = Annotated[
+    RevealObservationEffect | RevealFindingEffect,
+    Field(discriminator="type"),
+]
+
+
+class StakeholderInteractionContent(StrictModel):
+    objective: str = Field(min_length=1)
+    context: list[str] = Field(default_factory=list)
+
+
+class TraineeAssessmentCondition(StrictModel):
+    hypothesis_id: str = Field(min_length=1, pattern=r"^H[0-9]+$")
+    confidence: Confidence
+
+
+class EvidenceSupportCondition(StrictModel):
+    below: Confidence
+    confirmation_evidence_ids: list[EvidenceIdentifier] = Field(min_length=1)
+
+
+class StakeholderFollowUpWhen(StrictModel):
+    trainee_assessment: TraineeAssessmentCondition
+    evidence_support: EvidenceSupportCondition
+
+
+class StakeholderFollowUpDefinition(StrictModel):
+    id: str
+    when: StakeholderFollowUpWhen
+    objective: str = Field(min_length=1)
+    context: list[str] = Field(default_factory=list)
+
+
+class RevealEvidenceEventDefinition(StrictModel):
+    id: str
+    type: Literal["reveal_evidence"]
+    trigger: TriggerDefinition
+    effects: list[EventEffect] = Field(min_length=1)
+    once: bool = True
+
+
+class StakeholderInteractionEventDefinition(StrictModel):
+    id: str
+    type: Literal["stakeholder_interaction"]
+    trigger: TriggerDefinition
+    actor_role: str
+    interaction: StakeholderInteractionContent
+    follow_ups: list[StakeholderFollowUpDefinition] = Field(default_factory=list)
+    once: bool = True
+
+
+EventDefinition = Annotated[
+    RevealEvidenceEventDefinition | StakeholderInteractionEventDefinition,
+    Field(discriminator="type"),
+]
+
+
+def _events_from_legacy_timeline(
+    timeline: list[TimelineEvent] | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for raw in timeline:
+        item = raw.model_dump(mode="json") if isinstance(raw, TimelineEvent) else raw
+        events.append(
+            {
+                "id": item["id"],
+                "type": "reveal_evidence",
+                "trigger": {
+                    "type": "simulation_time",
+                    "at_minute": item["at_minute"],
+                },
+                "effects": [
+                    {
+                        "type": "reveal_observation",
+                        "role_id": item["role"],
+                        "observation_id": observation_id,
+                    }
+                    for observation_id in item["observation_ids"]
+                ],
+                "once": True,
+            }
+        )
+    return events
+
+
+def _timeline_from_events(events: list[EventDefinition]) -> list[TimelineEvent]:
+    timeline: list[TimelineEvent] = []
+    for definition in events:
+        if not isinstance(definition, RevealEvidenceEventDefinition):
+            continue
+        if not isinstance(definition.trigger, SimulationTimeTrigger):
+            continue
+        observations = [
+            effect
+            for effect in definition.effects
+            if isinstance(effect, RevealObservationEffect)
+        ]
+        if len(observations) != len(definition.effects) or not observations:
+            continue
+        roles = {effect.role_id for effect in observations}
+        if len(roles) != 1:
+            continue
+        timeline.append(
+            TimelineEvent(
+                id=definition.id,
+                at_minute=definition.trigger.at_minute,
+                type="observation_grant",
+                role=next(iter(roles)),
+                observation_ids=[effect.observation_id for effect in observations],
+            )
+        )
+    return timeline
+
+
+AllTrigger.model_rebuild()
+AnyTrigger.model_rebuild()
+
+
 class ObservationOverride(StrictModel):
     observation_id: EvidenceIdentifier
     statement: str | None = None
@@ -229,9 +424,23 @@ class CompiledScenario(StrictModel):
     findings: list[FindingDefinition]
     hypotheses: list[HypothesisDefinition]
     investigations: list[InvestigationDefinition]
-    timeline: list[TimelineEvent]
+    events: list[EventDefinition] = Field(default_factory=list)
+    timeline: list[TimelineEvent] = Field(default_factory=list, exclude=True)
     variants: list[VariantDefinition]
     scoring_rules: list[ScoringRule]
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_timeline(cls, value):
+        if isinstance(value, dict) and not value.get("events") and value.get("timeline"):
+            value = dict(value)
+            value["events"] = _events_from_legacy_timeline(value["timeline"])
+        return value
+
+    @model_validator(mode="after")
+    def project_legacy_timeline(self) -> "CompiledScenario":
+        self.timeline = _timeline_from_events(self.events)
+        return self
 
     def role(self, role_id: str) -> RoleDefinition:
         return next(role for role in self.roles if role.id == role_id)
@@ -273,11 +482,25 @@ class RuntimeScenario(StrictModel):
     findings: list[FindingDefinition]
     hypotheses: list[HypothesisDefinition]
     investigations: list[InvestigationDefinition]
-    timeline: list[TimelineEvent]
+    events: list[EventDefinition] = Field(default_factory=list)
+    timeline: list[TimelineEvent] = Field(default_factory=list, exclude=True)
     scoring_rules: list[ScoringRule]
     variant_id: str
     ground_truth: dict[str, Any] = Field(exclude=True)
     investigation_outcomes: list[InvestigationOutcome] = Field(exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_timeline(cls, value):
+        if isinstance(value, dict) and not value.get("events") and value.get("timeline"):
+            value = dict(value)
+            value["events"] = _events_from_legacy_timeline(value["timeline"])
+        return value
+
+    @model_validator(mode="after")
+    def project_legacy_timeline(self) -> "RuntimeScenario":
+        self.timeline = _timeline_from_events(self.events)
+        return self
 
     def role(self, role_id: str) -> RoleDefinition:
         return next(role for role in self.roles if role.id == role_id)
