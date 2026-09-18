@@ -265,6 +265,10 @@ class SimulationService:
                 "cited_evidence_ids": cited_evidence_ids,
             },
         )
+        # Persist the trainee's question before inference starts so clients can
+        # show it in the thread immediately, even while the reply is still
+        # being generated (or if generation later fails).
+        self.repo.commit()
         request = RoleResponseRequest(
             role_id=role.id,
             role_display_name=role.display_name,

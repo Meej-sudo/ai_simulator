@@ -24,6 +24,7 @@ type State = {
   lastSeen: Record<string, number>;
   streamingText: string;
   streamingRole: string;
+  pendingMessage: { threadId: string; text: string; citations: string[] } | null;
   busy: boolean;
   loading: boolean;
   error: string;
@@ -46,6 +47,8 @@ type Action =
   | { type: "stream-start"; roleId: string }
   | { type: "stream-delta"; content: string }
   | { type: "stream-end" }
+  | { type: "pending-message"; message: { threadId: string; text: string; citations: string[] } }
+  | { type: "clear-pending" }
   | { type: "suggestions"; items: { id: string; label: string }[] }
   | { type: "notice"; message: string };
 
@@ -60,6 +63,7 @@ const initialState: State = {
   lastSeen: {},
   streamingText: "",
   streamingRole: "",
+  pendingMessage: null,
   busy: false,
   loading: true,
   error: "",
@@ -102,6 +106,10 @@ function reducer(state: State, action: Action): State {
       return { ...state, streamingText: state.streamingText + action.content };
     case "stream-end":
       return { ...state, streamingRole: "", streamingText: "" };
+    case "pending-message":
+      return { ...state, pendingMessage: action.message };
+    case "clear-pending":
+      return { ...state, pendingMessage: null };
     case "suggestions":
       return { ...state, suggestions: action.items };
     case "notice":
@@ -231,9 +239,9 @@ export function useSession(sessionId: string) {
   );
 
   const sendMessage = useCallback(
-    (text: string, citedEvidenceIds: string[]) =>
-      run(async () => {
-        if (state.activeThread === "channel:bridge") {
+    (text: string, citedEvidenceIds: string[]): Promise<boolean> => {
+      if (state.activeThread === "channel:bridge") {
+        return run(async () => {
           await api(
             `/sessions/${sessionId}/threads/${encodeURIComponent(state.activeThread)}/messages`,
             {
@@ -244,41 +252,63 @@ export function useSession(sessionId: string) {
               }),
             },
           );
-        } else {
-          const targetRole = state.activeThread.replace(/^dm:/, "");
-          dispatch({ type: "stream-start", roleId: targetRole });
-          try {
-            let completed = false;
-            for await (const item of streamApi(
-              `/sessions/${sessionId}/ask/stream`,
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  target_role: targetRole,
-                  message: text,
-                  cited_evidence_ids: citedEvidenceIds,
-                }),
-              },
-            )) {
-              if (item.type === "delta") {
-                dispatch({ type: "stream-delta", content: item.content });
-              } else if (item.type === "complete") {
-                completed = true;
-              } else if (item.type === "error") {
-                throw new Error(item.detail);
-              }
+          await refresh();
+        });
+      }
+      const targetRole = state.activeThread.replace(/^dm:/, "");
+      const threadId = state.activeThread;
+      // Move the trainee's message into the thread immediately; the role's
+      // reply streams in afterwards. The composer clears at once instead of
+      // waiting for generation to finish.
+      dispatch({
+        type: "pending-message",
+        message: { threadId, text, citations: citedEvidenceIds },
+      });
+      dispatch({ type: "busy", value: true });
+      dispatch({ type: "error", message: "" });
+      dispatch({ type: "stream-start", roleId: targetRole });
+      void (async () => {
+        try {
+          let completed = false;
+          for await (const item of streamApi(
+            `/sessions/${sessionId}/ask/stream`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                target_role: targetRole,
+                message: text,
+                cited_evidence_ids: citedEvidenceIds,
+              }),
+            },
+          )) {
+            if (item.type === "delta") {
+              dispatch({ type: "stream-delta", content: item.content });
+            } else if (item.type === "complete") {
+              completed = true;
+            } else if (item.type === "error") {
+              throw new Error(item.detail);
             }
-            if (!completed) {
-              throw new Error(
-                "The reply was interrupted before it finished. Please retry.",
-              );
-            }
-          } finally {
-            dispatch({ type: "stream-end" });
           }
+          if (!completed) {
+            throw new Error(
+              "The reply was interrupted before it finished. Please retry.",
+            );
+          }
+          await refresh();
+        } catch (cause) {
+          dispatch({
+            type: "error",
+            message:
+              cause instanceof Error ? cause.message : "Unexpected error",
+          });
+        } finally {
+          dispatch({ type: "stream-end" });
+          dispatch({ type: "clear-pending" });
+          dispatch({ type: "busy", value: false });
         }
-        await refresh();
-      }),
+      })();
+      return Promise.resolve(true);
+    },
     [refresh, run, sessionId, state.activeThread],
   );
 

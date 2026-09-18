@@ -107,6 +107,7 @@ export default function SessionView({
             activeThread={state.activeThread}
             events={state.events}
             evidence={discoveredEvidence}
+            pendingMessage={state.pendingMessage}
             roles={state.roles}
             streamingRole={state.streamingRole}
             streamingText={state.streamingText}
