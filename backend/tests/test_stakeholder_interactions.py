@@ -101,11 +101,22 @@ async def test_assessment_trigger_uses_only_ceo_authorized_context_and_fires_onc
     service = make_service(provider)
     session = await started(service)
     await service.advance_time_async(session.id, 45)
-    pressure = next(
-        item for item in service.interactions(session.id)
-        if item.event_definition_id == "E022"
-    )
-    assert pressure.started_at == 40
+    pressures = [
+        event
+        for event in service.events(session.id)
+        if event.event_type == EventType.ORGANIZATIONAL_PRESSURE_APPLIED
+    ]
+    assert [event.simulation_time for event in pressures] == [40, 45]
+    assert pressures[0].payload["source_kind"] == "role"
+    assert pressures[0].payload["source_id"] == "ceo"
+    assert pressures[0].payload["source_display_name"] == "Chief Executive Officer"
+    assert pressures[1].payload["source_kind"] == "external_entity"
+    assert pressures[1].payload["source_id"] == "press"
+    assert pressures[1].payload["source_display_name"] == "Media"
+    assert not {
+        item.event_definition_id for item in service.interactions(session.id)
+    } & {"E022", "E023"}
+    assert provider.stakeholder_requests == []
 
     await service.record_assessment(
         session.id,
@@ -134,6 +145,32 @@ async def test_assessment_trigger_uses_only_ceo_authorized_context_and_fires_onc
     assert "FD008" not in serialized
     assert "ground_truth" not in serialized
     assert executive[0].messages[0].message
+    assert len(provider.stakeholder_requests) == 1
+
+
+async def test_internal_and_external_pressure_fire_at_same_minute_in_authored_order():
+    provider = RecordingProvider()
+    service = make_service(provider)
+    session = service.create_session("trojan_horse_001", "track_alpha", seed=7)
+    await service.start_async(session.id)
+
+    await service.advance_time_async(session.id, 40)
+
+    pressures = [
+        event
+        for event in service.events(session.id)
+        if event.event_type == EventType.ORGANIZATIONAL_PRESSURE_APPLIED
+    ]
+    assert [event.simulation_time for event in pressures] == [40, 40]
+    assert [event.payload["event_definition_id"] for event in pressures] == [
+        "E023",
+        "E024",
+    ]
+    assert [event.payload["source_kind"] for event in pressures] == [
+        "role",
+        "external_entity",
+    ]
+    assert provider.stakeholder_requests == []
 
 
 async def test_dpo_evidence_trigger_receives_only_dpo_knowledge():

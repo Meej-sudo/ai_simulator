@@ -134,7 +134,7 @@ function renameEvidenceReferences(
               ? { ...effect, observation_id: rename(effect.observation_id) }
               : { ...effect, finding_id: rename(effect.finding_id) }),
           }
-        : {
+        : item.type === "stakeholder_interaction" ? {
             follow_ups: item.follow_ups.map((followUp) => ({
               ...followUp,
               when: {
@@ -145,7 +145,8 @@ function renameEvidenceReferences(
                 },
               },
             })),
-          }),
+          }
+        : {}),
     })) as EventDefinition[],
     variants: document.variants.map((variant) => ({
       ...variant,
@@ -195,7 +196,11 @@ function renameRoleReferences(
       }),
       ...(item.type === "reveal_evidence"
         ? { effects: item.effects.map((effect) => ({ ...effect, role_id: rename(effect.role_id) ?? effect.role_id })) }
-        : { actor_role: rename(item.actor_role) ?? item.actor_role }),
+        : item.type === "stakeholder_interaction"
+          ? { actor_role: rename(item.actor_role) ?? item.actor_role }
+          : item.source.kind === "role"
+            ? { source: { ...item.source, id: rename(item.source.id) ?? item.source.id } }
+            : {}),
     })) as EventDefinition[],
     variants: document.variants.map((variant) => ({
       ...variant,
@@ -208,6 +213,21 @@ function renameRoleReferences(
       ...item,
       target_role: rename(item.target_role),
     })),
+  };
+}
+
+function renameExternalEntityReferences(
+  document: ScenarioDocument,
+  previous: string,
+  next: string,
+): ScenarioDocument {
+  return {
+    ...document,
+    events: document.events.map((item) => item.type === "organizational_pressure"
+      && item.source.kind === "external_entity"
+      && item.source.id === previous
+      ? { ...item, source: { ...item.source, id: next } }
+      : item) as EventDefinition[],
   };
 }
 
@@ -438,6 +458,10 @@ function TriggerEditor(props: TriggerEditorProps) {
 export default function ScenarioForm({ document, onChange }: Props) {
   const [section, setSection] = useState<Section>("scenario");
   const roles = document.roles.map((item) => ({ id: item.id, label: item.display_name }));
+  const externalEntities = document.external_entities.map((item) => ({
+    id: item.id,
+    label: item.display_name,
+  }));
   const observations = document.observations.map((item) => ({
     id: item.id,
     label: `${item.id} - ${item.statement}`,
@@ -828,10 +852,12 @@ export default function ScenarioForm({ document, onChange }: Props) {
                   })}>Remove</button>
                 </div>
                 <div className="form-grid">
-                  <Field label="ID" value={item.id} onChange={(value) => onChange({
-                    ...document,
-                    external_entities: replaceAt(document.external_entities, index, { ...item, id: value }),
-                  })} />
+                  <Field label="ID" value={item.id} onChange={(value) => onChange(
+                    renameExternalEntityReferences({
+                      ...document,
+                      external_entities: replaceAt(document.external_entities, index, { ...item, id: value }),
+                    }, item.id, value),
+                  )} />
                   <Field label="Display name" value={item.display_name} onChange={(value) => onChange({
                     ...document,
                     external_entities: replaceAt(document.external_entities, index, { ...item, display_name: value }),
@@ -1190,7 +1216,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
         <section className="form-section">
           <Heading
             title="Authored events"
-            description="Define deterministic triggers. Reveal events change knowledge; stakeholder events ask the trainee for a response. The model only writes stakeholder wording."
+            description="Define deterministic triggers. Reveal events change knowledge, pressure events publish passive demands, and stakeholder events ask the trainee for a response. The model only writes stakeholder wording."
             addLabel="Add event"
             onAdd={() => {
               if (!document.roles[0] || !document.observations[0]) return;
@@ -1225,7 +1251,11 @@ export default function ScenarioForm({ document, onChange }: Props) {
               return (
                 <article className="form-card event-card" key={`${item.id}-${index}`}>
                   <div className="form-card-heading">
-                    <strong>{item.id} · {item.type === "reveal_evidence" ? "Reveal evidence" : "Stakeholder interaction"}</strong>
+                    <strong>{item.id} · {item.type === "reveal_evidence"
+                      ? "Reveal evidence"
+                      : item.type === "organizational_pressure"
+                        ? "Organizational pressure"
+                        : "Stakeholder interaction"}</strong>
                     <button type="button" className="danger-button" onClick={() => onChange({
                       ...document,
                       events: removeAt(document.events, index),
@@ -1264,6 +1294,22 @@ export default function ScenarioForm({ document, onChange }: Props) {
                             follow_ups: [],
                             once: item.once,
                           });
+                        } else if (event.target.value === "organizational_pressure") {
+                          const role = document.roles[0];
+                          updateEvent({
+                            id: item.id,
+                            type: "organizational_pressure",
+                            trigger: item.trigger,
+                            source: role
+                              ? { kind: "role", id: role.id }
+                              : { kind: "external_entity", id: document.external_entities[0]?.id ?? "" },
+                            pressure: {
+                              category: "operational",
+                              severity: "medium",
+                              message: "Describe the pressure placed on the incident team.",
+                            },
+                            once: item.once,
+                          });
                         } else {
                           updateEvent({
                             id: item.id,
@@ -1279,6 +1325,7 @@ export default function ScenarioForm({ document, onChange }: Props) {
                         }
                       }}>
                         <option value="reveal_evidence">Reveal evidence</option>
+                        <option value="organizational_pressure">Organizational pressure</option>
                         <option value="stakeholder_interaction">Stakeholder interaction</option>
                       </select>
                     </label>
@@ -1330,6 +1377,61 @@ export default function ScenarioForm({ document, onChange }: Props) {
                           </div>
                         ))}
                       </div>
+                    ) : item.type === "organizational_pressure" ? (
+                      <>
+                        <label>
+                          Source kind
+                          <select value={item.source.kind} onChange={(event) => {
+                            const kind = event.target.value as "role" | "external_entity";
+                            updateEvent({
+                              ...item,
+                              source: {
+                                kind,
+                                id: kind === "role"
+                                  ? document.roles[0]?.id ?? ""
+                                  : document.external_entities[0]?.id ?? "",
+                              },
+                            });
+                          }}>
+                            <option value="role">Internal role</option>
+                            <option value="external_entity">External entity</option>
+                          </select>
+                        </label>
+                        <label>
+                          Source
+                          <select value={item.source.id} onChange={(event) => updateEvent({
+                            ...item,
+                            source: { ...item.source, id: event.target.value },
+                          })}>
+                            {(item.source.kind === "role" ? roles : externalEntities).map((option) => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <Field label="Pressure category" value={item.pressure.category} onChange={(value) => updateEvent({
+                          ...item,
+                          pressure: { ...item.pressure, category: value },
+                        })} />
+                        <label>
+                          Severity
+                          <select value={item.pressure.severity} onChange={(event) => updateEvent({
+                            ...item,
+                            pressure: {
+                              ...item.pressure,
+                              severity: event.target.value as typeof item.pressure.severity,
+                            },
+                          })}>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                            <option value="critical">critical</option>
+                          </select>
+                        </label>
+                        <TextField label="Pressure message" value={item.pressure.message} onChange={(value) => updateEvent({
+                          ...item,
+                          pressure: { ...item.pressure, message: value },
+                        })} help="Shown verbatim in the incident bridge; no LLM call or chat thread is created." />
+                      </>
                     ) : (
                       <>
                         <label>Stakeholder<select value={item.actor_role} onChange={(event) => updateEvent({ ...item, actor_role: event.target.value })}>{roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>

@@ -10,6 +10,7 @@ from app.domain.scenarios.models import (
     AnyTrigger,
     AssessmentExistsTrigger,
     Confidence,
+    OrganizationalPressureEventDefinition,
     Reliability,
     RevealEvidenceEventDefinition,
     RevealFindingEffect,
@@ -1482,6 +1483,8 @@ class SimulationService:
             for definition in eligible:
                 if isinstance(definition, RevealEvidenceEventDefinition):
                     self._execute_reveal_event(session, definition)
+                elif isinstance(definition, OrganizationalPressureEventDefinition):
+                    self._execute_organizational_pressure(session, scenario, definition)
                 elif isinstance(definition, StakeholderInteractionEventDefinition):
                     await self._execute_stakeholder_interaction(
                         session, scenario, definition
@@ -1537,6 +1540,55 @@ class SimulationService:
                 actor_role=effect.role_id,
                 payload=payload,
             )
+
+    def _execute_organizational_pressure(
+        self,
+        session: SessionRecord,
+        scenario: RuntimeScenario,
+        definition: OrganizationalPressureEventDefinition,
+    ) -> None:
+        if definition.source.kind == "role":
+            source = self._require_role(scenario, definition.source.id)
+            actor_role = source.id
+            source_type = "internal_role"
+        else:
+            try:
+                source = scenario.external_entity(definition.source.id)
+            except StopIteration as exc:
+                raise NotFoundError(
+                    f"external entity not found: {definition.source.id}"
+                ) from exc
+            actor_role = None
+            source_type = source.type
+
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.EVENT_DEFINITION_FIRED,
+            actor_role=actor_role,
+            payload={
+                "event_definition_id": definition.id,
+                "event_definition_type": definition.type,
+                "source_kind": definition.source.kind,
+                "source_id": source.id,
+            },
+        )
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.ORGANIZATIONAL_PRESSURE_APPLIED,
+            actor_role=actor_role,
+            payload={
+                "event_definition_id": definition.id,
+                "source_kind": definition.source.kind,
+                "source_id": source.id,
+                "source_display_name": source.display_name,
+                "source_type": source_type,
+                "category": definition.pressure.category,
+                "severity": definition.pressure.severity,
+                "message": definition.pressure.message,
+            },
+        )
 
     async def _execute_stakeholder_interaction(
         self,

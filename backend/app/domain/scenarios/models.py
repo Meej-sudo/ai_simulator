@@ -261,6 +261,26 @@ class RevealEvidenceEventDefinition(StrictModel):
     once: bool = True
 
 
+class PressureSourceDefinition(StrictModel):
+    kind: Literal["role", "external_entity"]
+    id: ScenarioIdentifier
+
+
+class OrganizationalPressureContent(StrictModel):
+    category: ScenarioIdentifier
+    severity: Literal["low", "medium", "high", "critical"] = "medium"
+    message: str = Field(min_length=1)
+
+
+class OrganizationalPressureEventDefinition(StrictModel):
+    id: str
+    type: Literal["organizational_pressure"]
+    trigger: TriggerDefinition
+    source: PressureSourceDefinition
+    pressure: OrganizationalPressureContent
+    once: bool = True
+
+
 class StakeholderInteractionEventDefinition(StrictModel):
     id: str
     type: Literal["stakeholder_interaction"]
@@ -272,7 +292,9 @@ class StakeholderInteractionEventDefinition(StrictModel):
 
 
 EventDefinition = Annotated[
-    RevealEvidenceEventDefinition | StakeholderInteractionEventDefinition,
+    RevealEvidenceEventDefinition
+    | OrganizationalPressureEventDefinition
+    | StakeholderInteractionEventDefinition,
     Field(discriminator="type"),
 ]
 

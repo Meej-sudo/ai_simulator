@@ -155,6 +155,22 @@ export type RevealEvidenceEvent = {
   once: boolean;
 };
 
+export type OrganizationalPressureEvent = {
+  id: string;
+  type: "organizational_pressure";
+  trigger: TriggerDefinition;
+  source: {
+    kind: "role" | "external_entity";
+    id: string;
+  };
+  pressure: {
+    category: string;
+    severity: "low" | "medium" | "high" | "critical";
+    message: string;
+  };
+  once: boolean;
+};
+
 export type StakeholderInteractionEvent = {
   id: string;
   type: "stakeholder_interaction";
@@ -165,7 +181,10 @@ export type StakeholderInteractionEvent = {
   once: boolean;
 };
 
-export type EventDefinition = RevealEvidenceEvent | StakeholderInteractionEvent;
+export type EventDefinition =
+  | RevealEvidenceEvent
+  | OrganizationalPressureEvent
+  | StakeholderInteractionEvent;
 
 export type ObservationOverride = {
   observation_id: string;
