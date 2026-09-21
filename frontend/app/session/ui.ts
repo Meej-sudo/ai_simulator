@@ -36,3 +36,12 @@ export function asStrings(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+// Splits streaming text at the last completed paragraph break, so finished
+// paragraphs can render as real Markdown while only the in-progress tail
+// still renders as fading plain-text words.
+export function splitSettledMarkdown(text: string): [settled: string, tail: string] {
+  const breakIndex = text.lastIndexOf("\n\n");
+  if (breakIndex === -1) return ["", text];
+  return [text.slice(0, breakIndex), text.slice(breakIndex + 2)];
+}

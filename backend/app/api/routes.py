@@ -419,7 +419,7 @@ def stream_event(event_type: str, **payload) -> str:
     return json.dumps({"type": event_type, **payload}, ensure_ascii=False) + "\n"
 
 
-def markdown_chunks(message: str, target_size: int = 36):
+def markdown_chunks(message: str, target_size: int = 1):
     chunk = ""
     for token in re.findall(r"\S+\s*|\s+", message):
         chunk += token
@@ -461,7 +461,7 @@ async def ask_role_stream(
         try:
             for chunk in markdown_chunks(response.message):
                 yield stream_event("delta", content=chunk)
-                await asyncio.sleep(0.018)
+                await asyncio.sleep(0.025)
         except Exception as exc:  # noqa: BLE001 - stream must end with a typed error
             yield stream_event(
                 "error",

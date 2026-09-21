@@ -759,6 +759,14 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   background: var(--green);
   animation: response-cursor 1s steps(1, end) infinite;
 }
+@keyframes fade-in-token {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fade-in-token { animation: fade-in-token 200ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-token { animation: none; }
+}
 .message-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .evidence-chip {
   display: inline-flex;

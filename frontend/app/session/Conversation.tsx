@@ -9,7 +9,8 @@ import type {
   Evidence,
   Role,
 } from "./types";
-import { asString, asStrings, initials, roleName } from "./ui";
+import { asString, asStrings, initials, roleName, splitSettledMarkdown } from "./ui";
+import StreamingText from "./StreamingText";
 
 type Props = {
   activeThread: string;
@@ -148,6 +149,7 @@ function Message({
   evidence: Evidence[];
   streaming?: boolean;
 }) {
+  const [settled, tail] = streaming ? splitSettledMarkdown(text) : ["", ""];
   return (
     <article className={`room-message ${mine ? "mine" : ""}`}>
       <span className={`avatar ${mine ? "trainee-avatar" : `role-tone-${index % 4}`}`}>
@@ -159,7 +161,14 @@ function Message({
           <time>T+{time}</time>
         </div>
         <div className={`message-bubble markdown-body ${streaming ? "is-streaming" : ""}`}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          {streaming ? (
+            <>
+              {settled && <ReactMarkdown remarkPlugins={[remarkGfm]}>{settled}</ReactMarkdown>}
+              <StreamingText content={tail} />
+            </>
+          ) : (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          )}
         </div>
         <EvidenceChips ids={citations} evidence={evidence} />
       </div>
