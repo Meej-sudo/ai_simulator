@@ -329,17 +329,32 @@ events:
     - Ask for scope, affected data, evidence quality, and unresolved gaps.
   once: true
 - id: E022
-  type: stakeholder_interaction
+  type: organizational_pressure
   trigger:
     type: event_fired
     event_id: E004
-  actor_role: ceo
-  interaction:
-    objective: Balance pressure to restore service with the SOC need to preserve evidence.
-    context:
-    - Operational disruption is creating pressure to restore affected services.
-    - The SOC needs enough time and system integrity to preserve useful evidence.
-    - Ask for a practical recommendation and tradeoffs; do not negotiate autonomously.
+  source:
+    kind: role
+    id: ceo
+  pressure:
+    category: operational_restoration
+    severity: high
+    message: Senior leadership is pressing for affected services to be restored quickly,
+      while the SOC still needs enough time and system integrity to preserve useful evidence.
+  once: true
+- id: E023
+  type: organizational_pressure
+  trigger:
+    type: event_fired
+    event_id: E005
+  source:
+    kind: external_entity
+    id: press
+  pressure:
+    category: media
+    severity: medium
+    message: Media outlets are requesting confirmation of the ransomware incident and
+      asking whether customer information may have been affected.
   once: true
 scoring:
 - id: involve_dpo

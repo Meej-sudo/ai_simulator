@@ -473,19 +473,32 @@ events:
     - Ask for a clear recommendation and who is accountable for it.
   once: true
 - id: E023
-  type: stakeholder_interaction
+  type: organizational_pressure
   trigger:
     type: event_fired
     event_id: E006
-  actor_role: ceo
-  interaction:
-    objective: Balance pressure to restore email and payroll operations against
-      the SOC's need to contain the spread and preserve evidence.
-    context:
-    - Multiple departments are reporting erratic computer behavior and a flood
-      of helpdesk tickets.
-    - Operational disruption is creating pressure to restore normal service quickly.
-    - Ask for a practical recommendation and tradeoffs; do not negotiate autonomously.
+  source:
+    kind: role
+    id: ceo
+  pressure:
+    category: operational_restoration
+    severity: high
+    message: Senior leadership is pressing for email and payroll operations to be
+      restored quickly, while the SOC still needs to contain the spread and preserve evidence.
+  once: true
+- id: E024
+  type: organizational_pressure
+  trigger:
+    type: event_fired
+    event_id: E006
+  source:
+    kind: external_entity
+    id: press
+  pressure:
+    category: media
+    severity: medium
+    message: Media outlets are asking about the widespread disruption and whether
+      employee or payroll information has been compromised.
   once: true
 scoring:
 - id: involve_hr_director_promptly

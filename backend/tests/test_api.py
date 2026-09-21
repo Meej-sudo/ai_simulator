@@ -94,6 +94,17 @@ def test_http_sprint_one_discovery_workflow_and_leakage_boundaries(tmp_path: Pat
         events = client.get(f"/sessions/{session_id}/events")
         assert events.status_code == 200
         assert all("created_at" in event for event in events.json())
+        pressure_events = [
+            event
+            for event in events.json()
+            if event["event_type"] == "ORGANIZATIONAL_PRESSURE_APPLIED"
+        ]
+        assert [
+            (event["simulation_time"], event["payload"]["source_kind"])
+            for event in pressure_events
+        ] == [(40, "role"), (45, "external_entity")]
+        assert pressure_events[1]["payload"]["source_display_name"] == "Media"
+        assert client.get(f"/sessions/{session_id}/interactions").json() == []
 
         request = client.post(
             f"/sessions/{session_id}/investigations",

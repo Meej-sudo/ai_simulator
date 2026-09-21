@@ -228,6 +228,36 @@ def test_rejects_duplicate_external_entity_accepts(tmp_path: Path):
         compiler(catalogs).compile(scenario)
 
 
+def test_rejects_unknown_internal_pressure_source(tmp_path: Path):
+    scenario, catalogs = copy_content(tmp_path)
+    path = scenario / "definition.yaml"
+    document = load(path)
+    pressure = next(item for item in document["events"] if item["id"] == "E022")
+    pressure["source"] = {"kind": "role", "id": "ghost"}
+    dump(path, document)
+
+    with pytest.raises(
+        ScenarioValidationError,
+        match="unknown pressure source role ghost",
+    ):
+        compiler(catalogs).compile(scenario)
+
+
+def test_rejects_unknown_external_pressure_source(tmp_path: Path):
+    scenario, catalogs = copy_content(tmp_path)
+    path = scenario / "definition.yaml"
+    document = load(path)
+    pressure = next(item for item in document["events"] if item["id"] == "E023")
+    pressure["source"] = {"kind": "external_entity", "id": "ghost_agency"}
+    dump(path, document)
+
+    with pytest.raises(
+        ScenarioValidationError,
+        match="unknown pressure source external entity ghost_agency",
+    ):
+        compiler(catalogs).compile(scenario)
+
+
 def test_rejects_invalid_personality_trait(tmp_path: Path):
     scenario, catalogs = copy_content(tmp_path)
     path = catalogs / "roles.yaml"

@@ -795,6 +795,7 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
 }
 .structured-record.decision { --record-color: var(--green); }
 .structured-record.assessment { --record-color: var(--amber); }
+.structured-record.pressure { --record-color: var(--red); }
 .structured-record.investigation { --record-color: #7fb4f5; }
 .record-label { display: flex; gap: 8px; margin-bottom: 7px; }
 .record-label span {

@@ -28,6 +28,7 @@ const bridgeTypes = new Set([
   "TIMELINE_EVENT_TRIGGERED",
   "DECISION_MADE",
   "ASSESSMENT_RECORDED",
+  "ORGANIZATIONAL_PRESSURE_APPLIED",
   "INVESTIGATION_STARTED",
   "INVESTIGATION_COMPLETED",
 ]);
@@ -86,8 +87,15 @@ function StructuredEvent({
   const target = roleName(roles, event.target_role);
   const isDecision = type === "DECISION_MADE";
   const isAssessment = type === "ASSESSMENT_RECORDED";
+  const isPressure = type === "ORGANIZATIONAL_PRESSURE_APPLIED";
   const isInvestigation = type.startsWith("INVESTIGATION_");
-  const style = isDecision ? "decision" : isAssessment ? "assessment" : "investigation";
+  const style = isDecision
+    ? "decision"
+    : isAssessment
+      ? "assessment"
+      : isPressure
+        ? "pressure"
+        : "investigation";
 
   let title = type.replaceAll("_", " ");
   let body = "";
@@ -102,6 +110,13 @@ function StructuredEvent({
     title = `Assessment · ${asString(event.payload.hypothesis_label)}`;
     body = asString(event.payload.statement);
     sub = [actor, asString(event.payload.confidence)].filter(Boolean).join(" · ");
+  } else if (isPressure) {
+    title = `Organizational pressure · ${asString(event.payload.category).replaceAll("_", " ")}`;
+    body = asString(event.payload.message);
+    sub = [
+      asString(event.payload.source_display_name),
+      asString(event.payload.severity) && `${asString(event.payload.severity)} severity`,
+    ].filter(Boolean).join(" · ");
   } else if (isInvestigation) {
     title =
       type === "INVESTIGATION_COMPLETED"
@@ -255,6 +270,7 @@ export default function Conversation({
           if (
             event.event_type === "DECISION_MADE" ||
             event.event_type === "ASSESSMENT_RECORDED" ||
+            event.event_type === "ORGANIZATIONAL_PRESSURE_APPLIED" ||
             event.event_type === "INVESTIGATION_STARTED" ||
             event.event_type === "INVESTIGATION_COMPLETED"
           ) {

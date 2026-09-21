@@ -463,19 +463,36 @@ uses forms rather than raw YAML. Sprint 1 sections cover:
 - observations and findings
 - public hypotheses
 - investigations, matching phrases, performers, prerequisites, and duration
-- generic deterministic event triggers, evidence effects, stakeholder objectives, and follow-ups
+- generic deterministic event triggers, evidence effects, passive organizational
+  pressure, stakeholder objectives, and follow-ups
 - hidden ground truth and per-variant investigation outcomes
 - migrated scoring rules
 
 Events are strongly typed and deterministic. Supported triggers are
 `simulation_time`, `assessment_exists`, `evidence_known`, `decision_recorded`,
 `communication_sent`, `event_fired`, `all`, and `any`. Reveal events apply typed
-knowledge effects; stakeholder events select an actor role and an authored
-objective. The configured model only turns that objective into wording using the
-actor's current knowledge. It never decides whether an event fires.
+knowledge effects. Organizational-pressure events select an internal role or an
+external entity and publish an authored demand to the incident bridge without
+opening a chat or calling the model. Stakeholder events select an actor role and
+an authored objective. The configured model only turns that objective into wording
+using the actor's current knowledge. It never decides whether an event fires.
 
 ```yaml
 events:
+  - id: E019
+    type: organizational_pressure
+    trigger:
+      type: simulation_time
+      at_minute: 40
+    source:
+      kind: role
+      id: ceo
+    pressure:
+      category: operational_restoration
+      severity: high
+      message: Leadership asks when customer-facing services can be restored.
+    once: true
+
   - id: E020
     type: stakeholder_interaction
     trigger:
@@ -621,7 +638,7 @@ contracts, API redaction, and end-to-end discovery.
 - Scenario definitions are filesystem-backed. New sessions are pinned to an
   immutable snapshot; sessions created before this migration use the legacy
   current-content fallback until they are replaced.
-- External entities are authored and listed but outbound communication actions
-  are not part of this sprint.
+- External entities can originate passive organizational pressure, but outbound
+  trainee communication actions are not part of this sprint.
 - The compatibility `share-fact` route is temporary and should be removed after
   all clients migrate to `share-evidence`.

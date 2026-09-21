@@ -23,6 +23,7 @@ from .models import (
     HypothesisDefinition,
     InvestigationDefinition,
     ObservationDefinition,
+    OrganizationalPressureEventDefinition,
     RevealEvidenceEventDefinition,
     RevealFindingEffect,
     RevealObservationEffect,
@@ -538,6 +539,7 @@ class ScenarioCompiler:
         self._validate_events(
             runtime.events,
             {role.id for role in runtime.roles},
+            {entity.id for entity in runtime.external_entities},
             {item.id for item in runtime.observations},
             {item.id for item in runtime.findings},
             {item.id for item in runtime.hypotheses},
@@ -889,6 +891,7 @@ class ScenarioCompiler:
 
     def _cross_validate(self, compiled: CompiledScenario) -> None:
         role_ids = {role.id for role in compiled.roles}
+        external_entity_ids = {entity.id for entity in compiled.external_entities}
         observation_ids = {item.id for item in compiled.observations}
         finding_ids = {item.id for item in compiled.findings}
         evidence_ids = observation_ids | finding_ids
@@ -947,6 +950,7 @@ class ScenarioCompiler:
         self._validate_events(
             compiled.events,
             role_ids,
+            external_entity_ids,
             observation_ids,
             finding_ids,
             hypothesis_ids,
@@ -1063,6 +1067,7 @@ class ScenarioCompiler:
         cls,
         events: list[EventDefinition],
         role_ids: set[str],
+        external_entity_ids: set[str],
         observation_ids: set[str],
         finding_ids: set[str],
         hypothesis_ids: set[str],
@@ -1109,6 +1114,21 @@ class ScenarioCompiler:
                             f"event {event.id} contains duplicate effects"
                         )
                     seen.add(key)
+            elif isinstance(event, OrganizationalPressureEventDefinition):
+                if (
+                    event.source.kind == "role"
+                    and event.source.id not in role_ids
+                ):
+                    raise ScenarioValidationError(
+                        f"event {event.id} references unknown pressure source role {event.source.id}"
+                    )
+                if (
+                    event.source.kind == "external_entity"
+                    and event.source.id not in external_entity_ids
+                ):
+                    raise ScenarioValidationError(
+                        f"event {event.id} references unknown pressure source external entity {event.source.id}"
+                    )
             elif isinstance(event, StakeholderInteractionEventDefinition):
                 if event.actor_role not in role_ids:
                     raise ScenarioValidationError(
