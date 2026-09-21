@@ -160,11 +160,12 @@ function Message({
           <b>{name}</b>
           <time>T+{time}</time>
         </div>
-        <div className={`message-bubble markdown-body ${streaming ? "is-streaming" : ""}`}>
+        <div className="message-bubble markdown-body">
           {streaming ? (
             <>
               {settled && <ReactMarkdown remarkPlugins={[remarkGfm]}>{settled}</ReactMarkdown>}
               <StreamingText content={tail} />
+              <span className="stream-cursor" aria-hidden="true" />
             </>
           ) : (
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>

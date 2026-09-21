@@ -419,15 +419,9 @@ def stream_event(event_type: str, **payload) -> str:
     return json.dumps({"type": event_type, **payload}, ensure_ascii=False) + "\n"
 
 
-def markdown_chunks(message: str, target_size: int = 1):
-    chunk = ""
-    for token in re.findall(r"\S+\s*|\s+", message):
-        chunk += token
-        if len(chunk) >= target_size:
-            yield chunk
-            chunk = ""
-    if chunk:
-        yield chunk
+def word_chunks(message: str) -> list[str]:
+    # One word plus its trailing whitespace per chunk so the UI can fade each word once.
+    return re.findall(r"\S+\s*|\s+", message)
 
 
 @router.post("/sessions/{session_id}/ask/stream")
@@ -457,11 +451,11 @@ async def ask_role_stream(
             return
 
         # Provider output is held until fact-boundary validation succeeds, then
-        # released in readable Markdown chunks so unsafe output is never leaked.
+        # released one word at a time so unsafe output is never leaked.
         try:
-            for chunk in markdown_chunks(response.message):
+            for chunk in word_chunks(response.message):
                 yield stream_event("delta", content=chunk)
-                await asyncio.sleep(0.025)
+                await asyncio.sleep(0.015)
         except Exception as exc:  # noqa: BLE001 - stream must end with a typed error
             yield stream_event(
                 "error",
