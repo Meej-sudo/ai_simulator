@@ -68,6 +68,11 @@ export default function Composer({
   const selectedRole = activeThread.startsWith("dm:")
     ? roles.find((role) => role.id === activeThread.slice(3))
     : null;
+  // Free-text posting to the incident bridge is hidden for now: the entry box
+  // and Send button are not rendered on the bridge thread. The message mode,
+  // onMessage handler, and backend route are untouched; delete this flag and
+  // its uses to bring the bridge input back.
+  const bridgeChatHidden = mode === "message" && !selectedRole;
 
   function toggleCitation(evidenceId: string) {
     setCitations((current) =>
@@ -80,7 +85,7 @@ export default function Composer({
   async function submit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
-    if (!value) return;
+    if (!value || bridgeChatHidden) return;
     const citedSuffix =
       citations.length > 0 ? ` Evidence cited: ${citations.join(", ")}.` : "";
 
@@ -111,6 +116,12 @@ export default function Composer({
     }
   }
 
+  const submitLabels: Record<ComposerMode, string> = {
+    message: "Send",
+    investigate: "Request",
+    assess: "Record",
+    decide: "Record",
+  };
   const placeholders: Record<ComposerMode, string> = {
     message:
       selectedRole
@@ -229,44 +240,53 @@ export default function Composer({
         </div>
       )}
 
-      <div className="composer-entry">
-        <textarea
-          aria-label={modes.find((item) => item.id === mode)?.label}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder={placeholders[mode]}
-          rows={2}
-          value={text}
-        />
-        <button
-          className="composer-send"
-          disabled={
-            busy ||
-            !text.trim() ||
-            (mode !== "message" && !actorRole) ||
-            (mode === "investigate" && !performerRole) ||
-            (mode === "decide" && !category)
-          }
-          type="submit"
-        >
-          {busy ? "Working…" : mode === "message" ? "Send" : "Record"}
-        </button>
-      </div>
-      <p className="composer-hint">
-        Enter to submit · Shift+Enter for a new line
-        {mode === "message" && selectedRole
-          ? " · replies use only that role’s current evidence"
-          : ""}
-      </p>
+      {bridgeChatHidden ? (
+        <p className="composer-hint">
+          Open a role’s direct message to ask a question, or use the other tabs
+          to request work, record an assessment, or log a decision.
+        </p>
+      ) : (
+        <>
+          <div className="composer-entry">
+            <textarea
+              aria-label={modes.find((item) => item.id === mode)?.label}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder={placeholders[mode]}
+              rows={2}
+              value={text}
+            />
+            <button
+              className="composer-send"
+              disabled={
+                busy ||
+                !text.trim() ||
+                (mode !== "message" && !actorRole) ||
+                (mode === "investigate" && !performerRole) ||
+                (mode === "decide" && !category)
+              }
+              type="submit"
+            >
+              {busy ? "Working…" : submitLabels[mode]}
+            </button>
+          </div>
+          <p className="composer-hint">
+            Enter to submit · Shift+Enter for a new line
+            {mode === "message" && selectedRole
+              ? " · replies use only that role’s current evidence"
+              : ""}
+          </p>
+        </>
+      )}
     </form>
   );
 }
