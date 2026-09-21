@@ -9,7 +9,14 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        {process.env.NEXT_PUBLIC_GIT_COMMIT && (
+          <span className="build-info" title="Build commit">
+            {process.env.NEXT_PUBLIC_GIT_COMMIT}
+          </span>
+        )}
+      </body>
     </html>
   );
 }

@@ -41,6 +41,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        SHOW_BUILD_COMMIT: ${SHOW_BUILD_COMMIT:-true}
     environment:
       INTERNAL_API_URL: http://backend:8000
     depends_on:

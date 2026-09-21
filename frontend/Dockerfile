@@ -1,8 +1,15 @@
 FROM node:22-alpine AS build
+ARG SHOW_BUILD_COMMIT=true
+ENV SHOW_BUILD_COMMIT=$SHOW_BUILD_COMMIT
+# git and .git exist only so next.config.ts can read the commit hash for the
+# page footer; neither reaches the runtime image. Both are skipped when the
+# footer is switched off.
+RUN [ "$SHOW_BUILD_COMMIT" = "false" ] || apk add --no-cache git
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+COPY .git ./.git
 ARG NEXT_PUBLIC_API_URL=/api
 ARG INTERNAL_API_URL=http://backend:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL

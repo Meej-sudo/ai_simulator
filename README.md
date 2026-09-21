@@ -262,6 +262,17 @@ Start the application without a preselected model:
 docker compose up --build
 ```
 
+The short commit hash of the build is shown in the corner of every page. It is
+read from `.git` while the frontend image is built; the runtime image does not
+contain `.git`. To hide it, build with:
+
+```bash
+SHOW_BUILD_COMMIT=false docker compose up --build
+```
+
+Nothing is shown when the hash is switched off or the source is not a git
+checkout.
+
 Open:
 
 - UI: <http://localhost:3000>
