@@ -58,6 +58,7 @@ export default function TopBar({
 
   const displayMinutes = Math.floor(displaySeconds / 60);
   const displayRemainder = displaySeconds % 60;
+  const paused = session.status === "running" && !session.clock_running && !timeExpired;
 
   return (
     <header className="room-topbar">
@@ -65,7 +66,10 @@ export default function TopBar({
         Incident Room
         <small>{scenario.name} · {variant}</small>
       </div>
-      <div className="room-clock">
+      <div
+        className={`room-clock ${paused ? "is-paused" : ""}`}
+        title={paused ? "Clock paused" : undefined}
+      >
         <em>T+</em> {String(displayMinutes).padStart(3, "0")}:
         {String(displayRemainder).padStart(2, "0")} <em>min:sec</em>
       </div>

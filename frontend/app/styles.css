@@ -448,6 +448,18 @@ input[readonly] { color: var(--muted); cursor: not-allowed; }
   font-size: 10px;
   font-style: normal;
 }
+/* Blink while paused so the trainee does not forget the clock is stopped. */
+.room-clock.is-paused {
+  border-color: var(--amber);
+  animation: clock-paused 1.2s ease-in-out infinite;
+}
+@keyframes clock-paused {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .room-clock.is-paused { animation: none; opacity: .6; }
+}
 .room-advance { display: flex; gap: 6px; }
 .room-advance button,
 .room-end {
