@@ -139,8 +139,9 @@ The normal exercise flow is:
 
 1. The frontend lists public scenario metadata, variants, decision categories,
    and role descriptions, then creates and starts a session.
-2. Advancing the logical clock fires due events. Each grant produces a
-   `FACT_LEARNED` event for one role.
+2. Starting the session also starts its persisted real-time clock. The frontend
+   synchronizes it every ten seconds, while `+5` and `+15` remain available as
+   manual jumps. Every crossed minute uses the same deterministic event pipeline.
 3. Current knowledge is reconstructed by replaying that role's `FACT_LEARNED`
    events through the current simulation time. Facts are therefore not globally
    known merely because they exist in `facts.yaml`.
@@ -333,6 +334,16 @@ curl -X POST http://localhost:8000/sessions/SESSION_ID/advance-time \
   -d '{"minutes":45}'
 ```
 
+The session clock runs automatically after `start`. Polling preserves its
+sub-minute remainder, so ten-second synchronization does not discard elapsed
+seconds. These endpoints can also be used by another client:
+
+```bash
+curl -X POST http://localhost:8000/sessions/SESSION_ID/clock/sync
+curl -X POST http://localhost:8000/sessions/SESSION_ID/clock/pause
+curl -X POST http://localhost:8000/sessions/SESSION_ID/clock/resume
+```
+
 Request an investigation in natural language. There is no investigation menu in
 the trainee workflow:
 
@@ -346,8 +357,8 @@ curl -X POST http://localhost:8000/sessions/SESSION_ID/investigations \
   }'
 ```
 
-The matched investigation takes five simulated minutes. It does not complete
-from wall-clock time:
+The matched investigation takes five simulated minutes. It completes through
+normal clock synchronization or an optional manual jump:
 
 ```bash
 curl -X POST http://localhost:8000/sessions/SESSION_ID/advance-time \
@@ -400,6 +411,9 @@ POST /sessions
 GET  /sessions/{id}
 POST /sessions/{id}/start
 POST /sessions/{id}/advance-time
+POST /sessions/{id}/clock/sync
+POST /sessions/{id}/clock/pause
+POST /sessions/{id}/clock/resume
 POST /sessions/{id}/complete
 
 GET  /sessions/{id}/roles
@@ -559,8 +573,9 @@ DATABASE_URL=postgresql+psycopg://trainer:trainer@localhost:5432/trainer \
 ../.venv/bin/alembic upgrade head
 ```
 
-Schema version 2 adds immutable scenario data to session records. Docker applies
-the migration automatically; local deployments must run `alembic upgrade head`
+Schema version 2 adds immutable scenario data to session records. Version 3 adds
+the persisted clock state used for automatic advancement and pause/resume. Docker
+applies migrations automatically; local deployments must run `alembic upgrade head`
 before starting the updated API. New sessions retain their compiled scenario and
 variant snapshot even if authors edit the source files later.
 

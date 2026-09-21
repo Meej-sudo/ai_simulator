@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.domain.evaluation.engine import EvaluationEngine, EvaluationResult
@@ -47,14 +49,22 @@ from app.llm.validation import (
 )
 from app.models.database import SessionRecord
 from app.repositories.sessions import SessionRepository
+from app.services.clock import ClockService
 from app.services.errors import InvalidOperationError, NotFoundError
 from app.services.scenario_registry import ScenarioRegistry
 
 
 class SimulationService:
-    def __init__(self, db: Session, scenarios: ScenarioRegistry, llm_provider: LLMProvider):
+    def __init__(
+        self,
+        db: Session,
+        scenarios: ScenarioRegistry,
+        llm_provider: LLMProvider,
+        clock: ClockService | None = None,
+    ):
         self.repo = SessionRepository(db)
         self.scenarios = scenarios
+        self.clock = clock or ClockService()
         self.knowledge_engine = KnowledgeEngine()
         self.event_engine = EventEngine()
         self.evaluation_engine = EvaluationEngine()
@@ -103,6 +113,9 @@ class SimulationService:
             raise InvalidOperationError("only a created session can be started")
         scenario = self._runtime_scenario(session)
         session.status = SessionStatus.RUNNING
+        session.clock_running = True
+        session.clock_last_synced_at = self.clock.now()
+        session.clock_remainder_seconds = 0.0
         self.repo.append_event(
             session.id,
             0,
@@ -122,6 +135,7 @@ class SimulationService:
     def advance_time(self, session_id: str, minutes: int) -> SessionRecord:
         """Advance time while preserving the original synchronous service API."""
         session = self._running_session(session_id)
+        session.clock_last_synced_at = self.clock.now()
         scenario = self._runtime_scenario(session)
         old_time = session.simulation_time
         duration = scenario.scenario.duration_minutes
@@ -161,6 +175,8 @@ class SimulationService:
         )
         if new_time >= duration:
             session.status = SessionStatus.COMPLETED
+            session.clock_running = False
+            session.clock_remainder_seconds = 0.0
             self.repo.append_event(
                 session.id,
                 new_time,
@@ -171,50 +187,85 @@ class SimulationService:
         return session
 
     async def advance_time_async(self, session_id: str, minutes: int) -> SessionRecord:
-        """Advance API sessions and execute every event at its exact checkpoint."""
-        session = self._running_session(session_id)
-        scenario = self._runtime_scenario(session)
-        old_time = session.simulation_time
-        duration = scenario.scenario.duration_minutes
-        new_time = min(old_time + minutes, duration)
-        investigation_runs = [
-            run
-            for run in self.investigations(session.id)
-            if run.status == InvestigationStatus.IN_PROGRESS
-            and old_time < run.due_at <= new_time
-        ]
-        checkpoints = set(
-            self.event_engine.time_checkpoints(scenario.events, old_time, new_time)
-        )
-        checkpoints.update(run.due_at for run in investigation_runs)
-        checkpoints.add(new_time)
-        for checkpoint in sorted(checkpoints):
-            session.simulation_time = checkpoint
-            await self._process_authored_events(session, scenario)
-            for run in sorted(
-                (item for item in investigation_runs if item.due_at == checkpoint),
-                key=lambda item: item.id,
-            ):
-                self._complete_investigation(session, scenario, run)
-            await self._process_authored_events(session, scenario)
+        """Apply elapsed real time first, then the requested manual jump."""
+        session = self._running_session_for_update(session_id)
+        captured_at = self.clock.now()
+        await self._sync_clock_locked(session, captured_at=captured_at)
+        if session.status == SessionStatus.RUNNING:
+            await self._advance_time_locked_async(
+                session,
+                minutes,
+                source="manual",
+            )
+        self.repo.commit()
+        return session
 
-        self.repo.append_event(
-            session.id,
-            new_time,
-            EventType.TIME_ADVANCED,
-            payload={
-                "from_minute": old_time,
-                "to_minute": new_time,
-                "minutes": new_time - old_time,
-            },
-        )
-        if new_time >= duration:
-            session.status = SessionStatus.COMPLETED
+    async def sync_clock(self, session_id: str) -> SessionRecord:
+        """Persist elapsed wall time and process each crossed minute exactly once."""
+        session = self._session_for_update(session_id)
+        if session.status == SessionStatus.CREATED:
+            raise InvalidOperationError("session must be running")
+        if session.status == SessionStatus.COMPLETED:
+            session.clock_running = False
+            self.repo.commit()
+            return session
+        await self._sync_clock_locked(session, captured_at=self.clock.now())
+        self.repo.commit()
+        return session
+
+    async def pause_clock(self, session_id: str) -> SessionRecord:
+        session = self._running_session_for_update(session_id)
+        if not session.clock_running:
+            self.repo.commit()
+            return session
+
+        await self._sync_clock_locked(session, captured_at=self.clock.now())
+        if session.status == SessionStatus.RUNNING:
+            session.clock_running = False
             self.repo.append_event(
                 session.id,
-                new_time,
+                session.simulation_time,
+                EventType.CLOCK_PAUSED,
+                payload={"remainder_seconds": session.clock_remainder_seconds},
+            )
+        self.repo.commit()
+        return session
+
+    def resume_clock(self, session_id: str) -> SessionRecord:
+        session = self._running_session_for_update(session_id)
+        if session.clock_running:
+            self.repo.commit()
+            return session
+
+        session.clock_running = True
+        session.clock_last_synced_at = self.clock.now()
+        self.repo.append_event(
+            session.id,
+            session.simulation_time,
+            EventType.CLOCK_RESUMED,
+            payload={"remainder_seconds": session.clock_remainder_seconds},
+        )
+        self.repo.commit()
+        return session
+
+    async def complete_async(self, session_id: str) -> SessionRecord:
+        session = self._session_for_update(session_id)
+        if session.status == SessionStatus.COMPLETED:
+            session.clock_running = False
+            self.repo.commit()
+            return session
+        if session.status != SessionStatus.RUNNING:
+            raise InvalidOperationError("session must be running")
+
+        await self._sync_clock_locked(session, captured_at=self.clock.now())
+        if session.status == SessionStatus.RUNNING:
+            session.status = SessionStatus.COMPLETED
+            session.clock_running = False
+            self.repo.append_event(
+                session.id,
+                session.simulation_time,
                 EventType.SESSION_COMPLETED,
-                payload={"reason": "time_limit"},
+                payload={"reason": "trainee_ended"},
             )
         self.repo.commit()
         return session
@@ -226,6 +277,7 @@ class SimulationService:
         if session.status != SessionStatus.RUNNING:
             raise InvalidOperationError("session must be running")
         session.status = SessionStatus.COMPLETED
+        session.clock_running = False
         self.repo.append_event(
             session.id, session.simulation_time, EventType.SESSION_COMPLETED
         )
@@ -1128,6 +1180,103 @@ class SimulationService:
         if session.status != SessionStatus.RUNNING:
             raise InvalidOperationError("session must be running")
         return session
+
+    def _session_for_update(self, session_id: str) -> SessionRecord:
+        session = self.repo.get_for_update(session_id)
+        if session is None:
+            raise NotFoundError(f"session not found: {session_id}")
+        return session
+
+    def _running_session_for_update(self, session_id: str) -> SessionRecord:
+        session = self._session_for_update(session_id)
+        if session.status != SessionStatus.RUNNING:
+            raise InvalidOperationError("session must be running")
+        return session
+
+    async def _sync_clock_locked(
+        self,
+        session: SessionRecord,
+        *,
+        captured_at: datetime,
+    ) -> None:
+        if not session.clock_running or session.status != SessionStatus.RUNNING:
+            return
+
+        tick = self.clock.tick(
+            session.clock_last_synced_at,
+            session.clock_remainder_seconds,
+            captured_at=captured_at,
+        )
+        session.clock_last_synced_at = tick.captured_at
+        session.clock_remainder_seconds = tick.remainder_seconds
+        if tick.elapsed_minutes:
+            await self._advance_time_locked_async(
+                session,
+                tick.elapsed_minutes,
+                source="clock",
+            )
+
+    async def _advance_time_locked_async(
+        self,
+        session: SessionRecord,
+        minutes: int,
+        *,
+        source: str,
+    ) -> None:
+        """Advance through ordered minute checkpoints in the current transaction."""
+        if minutes <= 0:
+            return
+
+        scenario = self._runtime_scenario(session)
+        old_time = session.simulation_time
+        duration = scenario.scenario.duration_minutes
+        new_time = min(old_time + minutes, duration)
+        investigation_runs = [
+            run
+            for run in self.investigations(session.id)
+            if run.status == InvestigationStatus.IN_PROGRESS
+            and old_time < run.due_at <= new_time
+        ]
+        checkpoints = set(
+            self.event_engine.time_checkpoints(scenario.events, old_time, new_time)
+        )
+        checkpoints.update(run.due_at for run in investigation_runs)
+        checkpoints.add(new_time)
+
+        for checkpoint in sorted(checkpoints):
+            session.simulation_time = checkpoint
+            # Authored evidence follows scenario order. Investigation runs are
+            # projected in their original event sequence, so simultaneous work
+            # completes in request order rather than random UUID order.
+            self._process_reveal_events(session, scenario)
+            for run in (
+                item for item in investigation_runs if item.due_at == checkpoint
+            ):
+                self._complete_investigation(session, scenario, run)
+            self._process_reveal_events(session, scenario)
+            await self._process_authored_events(session, scenario)
+
+        self.repo.append_event(
+            session.id,
+            new_time,
+            EventType.TIME_ADVANCED,
+            payload={
+                "from_minute": old_time,
+                "to_minute": new_time,
+                "minutes": new_time - old_time,
+                "source": source,
+            },
+        )
+        if new_time >= duration:
+            session.status = SessionStatus.COMPLETED
+            session.clock_running = False
+            session.clock_remainder_seconds = 0.0
+            self.repo.append_event(
+                session.id,
+                new_time,
+                EventType.SESSION_COMPLETED,
+                payload={"reason": "time_limit"},
+            )
 
     def _runtime_scenario(self, session: SessionRecord) -> RuntimeScenario:
         if session.scenario_snapshot is not None:

@@ -59,6 +59,16 @@ class SessionRepository:
     def get(self, session_id: str) -> SessionRecord | None:
         return self.db.get(SessionRecord, session_id)
 
+    def get_for_update(self, session_id: str) -> SessionRecord | None:
+        """Serialize all mutations that can advance one session's clock."""
+        _hold_sequence_lock(self.db, session_id)
+        return self.db.scalar(
+            select(SessionRecord)
+            .where(SessionRecord.id == session_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def list_all(self) -> list[SessionRecord]:
         return list(
             self.db.scalars(

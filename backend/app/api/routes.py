@@ -303,9 +303,27 @@ async def advance_time(
     return await call_async(lambda: service.advance_time_async(session_id, body.minutes))
 
 
+@router.post("/sessions/{session_id}/clock/sync", response_model=SessionResponse)
+async def sync_clock(session_id: str, service: SimulationService = Depends(get_service)):
+    return await call_async(lambda: service.sync_clock(session_id))
+
+
+@router.post("/sessions/{session_id}/clock/pause", response_model=SessionResponse)
+async def pause_clock(session_id: str, service: SimulationService = Depends(get_service)):
+    return await call_async(lambda: service.pause_clock(session_id))
+
+
+@router.post("/sessions/{session_id}/clock/resume", response_model=SessionResponse)
+def resume_clock(session_id: str, service: SimulationService = Depends(get_service)):
+    return call(lambda: service.resume_clock(session_id))
+
+
 @router.post("/sessions/{session_id}/complete", response_model=SessionResponse)
-def complete_session(session_id: str, service: SimulationService = Depends(get_service)):
-    return call(lambda: service.complete(session_id))
+async def complete_session(
+    session_id: str,
+    service: SimulationService = Depends(get_service),
+):
+    return await call_async(lambda: service.complete_async(session_id))
 
 
 @router.get("/sessions/{session_id}/roles", response_model=list[RoleResponse])

@@ -43,6 +43,7 @@ type Action =
         "session" | "roles" | "knowledge" | "investigations" | "assessments" | "events" | "interactions"
       >;
     }
+  | { type: "session-updated"; session: Session }
   | { type: "thread"; threadId: string; sequence: number }
   | { type: "busy"; value: boolean }
   | { type: "error"; message: string }
@@ -93,6 +94,8 @@ function reducer(state: State, action: Action): State {
         },
       };
     }
+    case "session-updated":
+      return { ...state, session: action.session };
     case "thread":
       return {
         ...state,
@@ -126,7 +129,9 @@ export function useSession(sessionId: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const lastSequenceRef = useRef(0);
   const busyRef = useRef(false);
+  const sessionRef = useRef<Session | null>(null);
   busyRef.current = state.busy || state.streamingRole !== "";
+  sessionRef.current = state.session;
 
   const refresh = useCallback(async () => {
     const [session, roles, events, investigations, assessments, interactions] = await Promise.all([
@@ -200,6 +205,33 @@ export function useSession(sessionId: string) {
     return () => window.clearInterval(timer);
   }, [refresh, sessionId]);
 
+  // The backend owns elapsed time. Polling only asks it to materialize whole
+  // minutes; it persists the leftover seconds so a 10-second poll never loses
+  // the remainder and a later tab/reload can catch up safely.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = sessionRef.current;
+      if (
+        busyRef.current ||
+        document.hidden ||
+        !current ||
+        current.status !== "running" ||
+        !current.clock_running
+      ) return;
+
+      api<Session>(`/sessions/${sessionId}/clock/sync`, { method: "POST" })
+        .then((updated) => {
+          const minuteChanged = updated.simulation_time !== current.simulation_time;
+          sessionRef.current = updated;
+          if (minuteChanged || updated.status !== current.status) return refresh();
+          dispatch({ type: "session-updated", session: updated });
+          return undefined;
+        })
+        .catch(() => undefined);
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [refresh, sessionId]);
+
   const run = useCallback(
     async (operation: () => Promise<void>): Promise<boolean> => {
       dispatch({ type: "busy", value: true });
@@ -238,6 +270,24 @@ export function useSession(sessionId: string) {
           method: "POST",
           body: JSON.stringify({ minutes }),
         });
+        await refresh();
+      }),
+    [refresh, run, sessionId],
+  );
+
+  const pauseClock = useCallback(
+    () =>
+      run(async () => {
+        await api(`/sessions/${sessionId}/clock/pause`, { method: "POST" });
+        await refresh();
+      }),
+    [refresh, run, sessionId],
+  );
+
+  const resumeClock = useCallback(
+    () =>
+      run(async () => {
+        await api(`/sessions/${sessionId}/clock/resume`, { method: "POST" });
         await refresh();
       }),
     [refresh, run, sessionId],
@@ -436,6 +486,8 @@ export function useSession(sessionId: string) {
     discoveredEvidence,
     selectThread,
     advance,
+    pauseClock,
+    resumeClock,
     sendMessage,
     requestWork,
     shareEvidence,

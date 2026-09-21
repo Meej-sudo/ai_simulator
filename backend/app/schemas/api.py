@@ -35,6 +35,9 @@ class SessionResponse(BaseModel):
     seed: int | None
     simulation_time: int
     status: SessionStatus
+    clock_running: bool
+    clock_last_synced_at: datetime | None
+    clock_remainder_seconds: float
     created_at: datetime
 
 

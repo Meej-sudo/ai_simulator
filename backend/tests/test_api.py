@@ -447,3 +447,35 @@ def test_confirmed_assessment_without_confirming_evidence_warns(tmp_path: Path):
         assert body["recorded"][0]["confidence"] == "confirmed"
         assert len(body["warnings"]) == 1
         assert "confirmed" in body["warnings"][0]
+
+
+def test_clock_can_be_paused_and_resumed_idempotently(tmp_path: Path):
+    with TestClient(make_app(tmp_path)) as client:
+        session_id = client.post(
+            "/sessions",
+            json={"scenario_id": "ransomware_001", "variant_id": "track_alpha"},
+        ).json()["id"]
+        started = client.post(f"/sessions/{session_id}/start")
+        assert started.status_code == 200
+        assert started.json()["clock_running"] is True
+
+        paused = client.post(f"/sessions/{session_id}/clock/pause")
+        paused_again = client.post(f"/sessions/{session_id}/clock/pause")
+        assert paused.status_code == 200
+        assert paused.json()["clock_running"] is False
+        assert paused_again.status_code == 200
+        assert paused_again.json()["clock_running"] is False
+
+        resumed = client.post(f"/sessions/{session_id}/clock/resume")
+        resumed_again = client.post(f"/sessions/{session_id}/clock/resume")
+        assert resumed.status_code == 200
+        assert resumed.json()["clock_running"] is True
+        assert resumed_again.status_code == 200
+        assert resumed_again.json()["clock_running"] is True
+
+        event_types = [
+            event["event_type"]
+            for event in client.get(f"/sessions/{session_id}/events").json()
+        ]
+        assert event_types.count("CLOCK_PAUSED") == 1
+        assert event_types.count("CLOCK_RESUMED") == 1

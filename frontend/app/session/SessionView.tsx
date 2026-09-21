@@ -87,6 +87,8 @@ export default function SessionView({
         busy={state.busy || ending}
         onAdvance={controller.advance}
         onEnd={endExercise}
+        onPause={controller.pauseClock}
+        onResume={controller.resumeClock}
         scenario={scenario}
         session={state.session}
       />

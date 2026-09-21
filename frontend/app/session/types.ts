@@ -22,6 +22,9 @@ export type Session = {
   variant_id: string;
   simulation_time: number;
   status: "created" | "running" | "completed";
+  clock_running: boolean;
+  clock_last_synced_at: string | null;
+  clock_remainder_seconds: number;
 };
 
 export type Role = {
