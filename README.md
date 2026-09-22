@@ -309,15 +309,41 @@ The Ollama adapter calls the native `/api/chat` endpoint with a JSON schema for
 each structured contract (`RoleResponse`, investigation interpretation, and
 assessment interpretation). Responses still go through the same knowledge-boundary
 validation, retry, safe fallback, and audit logging as the other providers. The
-exercise UI uses `/sessions/{id}/ask/stream`: Ollama's structured response arrives
-through its streaming transport, is buffered until the evidence-boundary checks
-pass, and is then released as newline-delimited JSON chunks. This keeps unsafe
-output from reaching the browser while still providing a warmup cursor and
-progressive Markdown rendering. The cursor is removed when the final completion
-event arrives.
+exercise UI uses `/sessions/{id}/ask/stream`, which releases the reply while it is
+still being generated. The provider streams one structured JSON object, and the
+backend decodes the `message` field out of that partial document, forwarding each
+newly completed piece of prose as a newline-delimited `delta` event. The warmup
+cursor shows until the first one arrives and is removed on completion.
+
+Two rules keep early release safe. Text stops being released the moment an
+internal evidence ID appears in it, because such a reply will be rejected and
+retried. A retry is never appended to what the trainee already saw: when the
+validated message differs from the text that was streamed, the endpoint sends a
+`replace` event carrying the validated message and the UI shows that instead.
+Structured fields, the evidence-boundary checks, the single retry, and the safe
+fallback are unchanged, and the completion event still carries the validated
+references and certainty.
 
 The configured model must support the structured JSON responses used for role
 responses, investigation routing, and assessment normalization.
+
+### Model preloading
+
+A remote Ollama server unloads a model a few minutes after its last request,
+which makes the first question of an exercise slow. Starting an exercise sends
+a load request (`POST /api/generate` with only the model and the same options
+the chat requests use), and a heartbeat repeats it whenever nothing has reached
+Ollama for four minutes. Both are fire-and-forget: a slow or failed load never
+blocks the exercise or fails a request.
+
+`keep_alive` is never sent, so the server's own unload timer applies unchanged.
+The heartbeat stops once nothing has used the model for thirty minutes, and the
+server then unloads it normally. Set `OLLAMA_KEEP_WARM=false` to switch the
+whole behaviour off. Only the Ollama provider is affected.
+
+Check what the server currently holds loaded with `curl "$OLLAMA_URL/api/ps"`:
+the model should appear once an exercise starts, with `expires_at` moving
+forward about every four minutes while the exercise stays open.
 
 ### OpenAI
 

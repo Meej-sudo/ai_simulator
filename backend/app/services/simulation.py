@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -357,6 +358,7 @@ class SimulationService:
         target_role: str,
         message: str,
         cited_evidence_ids: list[str] | None = None,
+        on_delta: Callable[[str], None] | None = None,
     ):
         return await self._ask_role(
             session_id,
@@ -364,6 +366,7 @@ class SimulationService:
             message,
             cited_evidence_ids or [],
             use_provider_stream=True,
+            on_delta=on_delta,
         )
 
     async def _ask_role(
@@ -374,6 +377,7 @@ class SimulationService:
         cited_evidence_ids: list[str],
         *,
         use_provider_stream: bool,
+        on_delta: Callable[[str], None] | None = None,
     ):
         session = self._running_session(session_id)
         scenario = self._runtime_scenario(session)
@@ -416,7 +420,7 @@ class SimulationService:
             trainee_question=message,
         )
         if use_provider_stream:
-            validated = await self.role_responder.generate_streamed(request)
+            validated = await self.role_responder.generate_streamed(request, on_delta)
         else:
             validated = await self.role_responder.generate(request)
         self._record_llm_violations(

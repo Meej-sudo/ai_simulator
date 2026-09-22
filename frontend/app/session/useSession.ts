@@ -49,6 +49,7 @@ type Action =
   | { type: "error"; message: string }
   | { type: "stream-start"; roleId: string }
   | { type: "stream-delta"; content: string }
+  | { type: "stream-replace"; content: string }
   | { type: "stream-end" }
   | { type: "pending-message"; message: { threadId: string; text: string; citations: string[] } }
   | { type: "clear-pending" }
@@ -110,6 +111,10 @@ function reducer(state: State, action: Action): State {
       return { ...state, streamingRole: action.roleId, streamingText: "" };
     case "stream-delta":
       return { ...state, streamingText: state.streamingText + action.content };
+    case "stream-replace":
+      // The validated reply differs from what streamed in, so show that
+      // instead of appending to text the trainee should not keep reading.
+      return { ...state, streamingText: action.content };
     case "stream-end":
       return { ...state, streamingRole: "", streamingText: "" };
     case "pending-message":
@@ -124,6 +129,17 @@ function reducer(state: State, action: Action): State {
       return state;
   }
 }
+
+// Reveal pacing. A model can finish a reply far faster than anyone can read
+// it, so words are released at a steady rate rather than as they arrive. The
+// rate rises with the backlog so a long reply does not drag, but never past
+// MAX_WORDS_PER_SECOND, which is what keeps a fast reply from flashing into
+// place. A model slower than WORDS_PER_SECOND is never held back: there is no
+// backlog to pace. Typical replies land around 18-25 words per second.
+const WORDS_PER_SECOND = 18;
+const MAX_WORDS_PER_SECOND = 45;
+const CATCH_UP_SECONDS = 2.5;
+const TICK_MS = 16;
 
 export function useSession(sessionId: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -323,6 +339,79 @@ export function useSession(sessionId: string) {
       dispatch({ type: "error", message: "" });
       dispatch({ type: "stream-start", roleId: targetRole });
       void (async () => {
+        // Arriving text is held here and released a few words at a time. One
+        // dispatch per tick also coalesces a burst of tokens into a single
+        // render instead of one render each.
+        let queued = "";
+        let credit = 0;
+        let lastTick = 0;
+        let streamEnded = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let onDrained: (() => void) | null = null;
+
+        // Words keep their trailing whitespace so each one fades in as a unit.
+        // While more text may still arrive, the final word is held back: it
+        // can still grow, and a half-word must not fade in on its own.
+        const releasable = (): string[] => {
+          const words = queued.match(/\S+\s*|\s+/g) ?? [];
+          if (words.length === 0) return [];
+          return streamEnded || /\s$/.test(queued) ? words : words.slice(0, -1);
+        };
+
+        const schedule = () => {
+          if (!timer) timer = setTimeout(step, TICK_MS);
+        };
+
+        function step() {
+          timer = null;
+          const now = performance.now();
+          // Cap the step so a throttled background tab does not bank credit.
+          const elapsed = Math.min((now - lastTick) / 1000, 1);
+          lastTick = now;
+
+          const words = releasable();
+          const rate = Math.min(
+            MAX_WORDS_PER_SECOND,
+            Math.max(WORDS_PER_SECOND, words.length / CATCH_UP_SECONDS),
+          );
+          credit += rate * elapsed;
+
+          const take = Math.min(words.length, Math.floor(credit));
+          if (take > 0) {
+            credit -= take;
+            const content = words.slice(0, take).join("");
+            queued = queued.slice(content.length);
+            dispatch({ type: "stream-delta", content });
+          }
+
+          if (releasable().length > 0) {
+            schedule();
+          } else if (streamEnded && onDrained) {
+            const drained = onDrained;
+            onDrained = null;
+            drained();
+          }
+        }
+
+        // Resolves once every word the model produced has been shown.
+        const fullyRevealed = () =>
+          new Promise<void>((resolve) => {
+            if (releasable().length === 0) {
+              resolve();
+              return;
+            }
+            onDrained = resolve;
+            schedule();
+          });
+
+        const discardQueued = () => {
+          if (timer) clearTimeout(timer);
+          timer = null;
+          onDrained = null;
+          queued = "";
+          credit = 0;
+        };
+
         try {
           let completed = false;
           for await (const item of streamApi(
@@ -337,7 +426,15 @@ export function useSession(sessionId: string) {
             },
           )) {
             if (item.type === "delta") {
-              dispatch({ type: "stream-delta", content: item.content });
+              queued += item.content;
+              // Restart the clock whenever the pacer was idle, so a pause in
+              // generation cannot bank credit and release a burst of words.
+              if (!timer) lastTick = performance.now();
+              schedule();
+            } else if (item.type === "replace") {
+              // Anything still queued belongs to the text being replaced.
+              discardQueued();
+              dispatch({ type: "stream-replace", content: item.content });
             } else if (item.type === "complete") {
               completed = true;
             } else if (item.type === "error") {
@@ -349,6 +446,10 @@ export function useSession(sessionId: string) {
               "The reply was interrupted before it finished. Please retry.",
             );
           }
+          // Let the last words finish appearing before the persisted message
+          // replaces the streaming one, so the reply does not jump to its end.
+          streamEnded = true;
+          await fullyRevealed();
           await refresh();
         } catch (cause) {
           dispatch({
@@ -357,6 +458,7 @@ export function useSession(sessionId: string) {
               cause instanceof Error ? cause.message : "Unexpected error",
           });
         } finally {
+          discardQueued();
           dispatch({ type: "stream-end" });
           dispatch({ type: "clear-pending" });
           dispatch({ type: "busy", value: false });

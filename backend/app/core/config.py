@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     ollama_model: str | None = None
     ollama_discovery_timeout_seconds: float = 10
     ollama_timeout_seconds: float = 300
+    # Preload the selected Ollama model when an exercise starts and keep it
+    # loaded while the exercise is in use.
+    ollama_keep_warm: bool = True
 
 
 @lru_cache

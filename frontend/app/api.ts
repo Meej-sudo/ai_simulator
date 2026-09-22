@@ -16,6 +16,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export type StreamEvent =
   | { type: "start" }
   | { type: "delta"; content: string }
+  | { type: "replace"; content: string }
   | {
       type: "complete";
       referenced_evidence_ids: string[];

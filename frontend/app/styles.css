@@ -156,56 +156,6 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .command h2 { margin: 18px 0 8px; }
 .mono { color: var(--muted); font-size: 10px; }
 form { display: grid; gap: 12px; }
-.answer-markdown {
-  margin: 22px 0 0;
-  padding: 18px;
-  border-left: 2px solid var(--green);
-  background: rgba(101, 240, 165, .055);
-  color: #cbd8d1;
-  line-height: 1.65;
-  overflow-wrap: anywhere;
-}
-.answer-markdown > :first-child { margin-top: 0; }
-.answer-markdown > :last-child { margin-bottom: 0; }
-.answer-markdown h1, .answer-markdown h2, .answer-markdown h3 {
-  margin: 1.35em 0 .55em;
-  color: var(--ink);
-  font-family: Georgia, serif;
-  font-weight: 500;
-  letter-spacing: -.015em;
-}
-.answer-markdown h1 { font-size: 23px; }
-.answer-markdown h2 { font-size: 20px; }
-.answer-markdown h3 { font-size: 17px; }
-.answer-markdown p, .answer-markdown ul, .answer-markdown ol { margin: 0 0 1em; }
-.answer-markdown ul, .answer-markdown ol { padding-left: 22px; }
-.answer-markdown li + li { margin-top: .35em; }
-.answer-markdown strong { color: var(--ink); }
-.answer-markdown a { color: var(--green); text-underline-offset: 3px; }
-.answer-markdown code {
-  padding: 2px 5px;
-  border: 1px solid rgba(101, 240, 165, .18);
-  background: #07100c;
-  color: var(--green);
-  font: 12px "SFMono-Regular", Consolas, monospace;
-}
-.answer-markdown pre { overflow: auto; padding: 13px; background: #07100c; }
-.answer-markdown pre code { padding: 0; border: 0; }
-.answer-markdown blockquote { margin: 1em 0; padding-left: 14px; border-left: 1px solid var(--amber); color: var(--muted); }
-.answer-markdown table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 13px; }
-.answer-markdown th, .answer-markdown td { padding: 8px; border: 1px solid var(--line); text-align: left; }
-.answer-markdown.is-streaming:empty::after,
-.answer-markdown.is-streaming > :last-child::after {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 1.08em;
-  margin-left: 5px;
-  vertical-align: -.17em;
-  background: linear-gradient(180deg, #c9ffe0, var(--green));
-  box-shadow: 0 0 5px rgba(101, 240, 165, .9), 0 0 14px rgba(101, 240, 165, .42);
-  animation: response-cursor 1s steps(1, end) infinite;
-}
 @keyframes response-cursor {
   0%, 46% { opacity: 1; }
   47%, 100% { opacity: .12; }

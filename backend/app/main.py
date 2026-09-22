@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,7 @@ from app.api.routes import router
 from app.core.config import get_settings
 from app.core.database import engine
 from app.llm.configuration import LLMConfiguration
+from app.llm.keep_warm import OllamaKeepWarm
 from app.models.database import Base
 from app.services.scenario_registry import ScenarioRegistry
 
@@ -21,7 +23,17 @@ async def lifespan(app: FastAPI):
     app.state.scenarios = registry
     app.state.llm_configuration = llm_configuration
     app.state.llm_provider = llm_configuration.provider
-    yield
+
+    keep_warm = OllamaKeepWarm(llm_configuration) if settings.ollama_keep_warm else None
+    app.state.keep_warm = keep_warm
+    heartbeat = asyncio.create_task(keep_warm.run()) if keep_warm else None
+    try:
+        yield
+    finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
 
 
 app = FastAPI(title="AI Incident Trainer API", version="0.1.0", lifespan=lifespan)

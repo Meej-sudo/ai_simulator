@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -290,8 +289,19 @@ def get_session(session_id: str, service: SimulationService = Depends(get_servic
 
 
 @router.post("/sessions/{session_id}/start", response_model=SessionResponse)
-async def start_session(session_id: str, service: SimulationService = Depends(get_service)):
-    return await call_async(lambda: service.start_async(session_id))
+async def start_session(
+    session_id: str,
+    request: Request,
+    service: SimulationService = Depends(get_service),
+):
+    session = await call_async(lambda: service.start_async(session_id))
+    # Load the model now so the trainee's first question is not the request
+    # that waits for it. Fire-and-forget: a slow or failed load must not keep
+    # the exercise from starting.
+    keep_warm = getattr(request.app.state, "keep_warm", None)
+    if keep_warm is not None:
+        keep_warm.schedule_preload()
+    return session
 
 
 @router.post("/sessions/{session_id}/advance-time", response_model=SessionResponse)
@@ -419,11 +429,6 @@ def stream_event(event_type: str, **payload) -> str:
     return json.dumps({"type": event_type, **payload}, ensure_ascii=False) + "\n"
 
 
-def word_chunks(message: str) -> list[str]:
-    # One word plus its trailing whitespace per chunk so the UI can fade each word once.
-    return re.findall(r"\S+\s*|\s+", message)
-
-
 @router.post("/sessions/{session_id}/ask/stream")
 async def ask_role_stream(
     session_id: str,
@@ -433,13 +438,40 @@ async def ask_role_stream(
     async def events():
         # Flush headers and let the UI show its warmup cursor before inference.
         yield stream_event("start")
+
+        # The provider's reply is released while it is still being generated.
+        # Deltas are queued by the generation task and drained here, because a
+        # streaming response cannot yield from inside the service call.
+        deltas: asyncio.Queue = asyncio.Queue()
+        released: list[str] = []
+
+        async def generate():
+            try:
+                return await service.ask_role_stream(
+                    session_id,
+                    body.target_role,
+                    body.message,
+                    body.cited_evidence_ids,
+                    on_delta=deltas.put_nowait,
+                )
+            finally:
+                deltas.put_nowait(None)
+
+        task = asyncio.create_task(generate())
         try:
-            response = await service.ask_role_stream(
-                session_id,
-                body.target_role,
-                body.message,
-                body.cited_evidence_ids,
-            )
+            while True:
+                chunk = await deltas.get()
+                if chunk is None:
+                    break
+                released.append(chunk)
+                yield stream_event("delta", content=chunk)
+            response = await task
+        except GeneratorExit:
+            # The client went away mid-reply. Let generation finish so the
+            # answer is still recorded, but retrieve the result so a failure
+            # is not reported as an unhandled task exception.
+            task.add_done_callback(lambda finished: finished.exception())
+            raise
         except NotFoundError as exc:
             yield stream_event("error", detail=str(exc), status=404)
             return
@@ -449,13 +481,6 @@ async def ask_role_stream(
         except LLMProviderError as exc:
             yield stream_event("error", detail=str(exc), status=502)
             return
-
-        # Provider output is held until fact-boundary validation succeeds, then
-        # released one word at a time so unsafe output is never leaked.
-        try:
-            for chunk in word_chunks(response.message):
-                yield stream_event("delta", content=chunk)
-                await asyncio.sleep(0.015)
         except Exception as exc:  # noqa: BLE001 - stream must end with a typed error
             yield stream_event(
                 "error",
@@ -463,6 +488,11 @@ async def ask_role_stream(
                 status=502,
             )
             return
+
+        # A retry or a withheld reply means the trainee saw text that is not
+        # the validated answer. Replace it rather than appending to it.
+        if "".join(released) != response.message:
+            yield stream_event("replace", content=response.message)
 
         yield stream_event(
             "complete",

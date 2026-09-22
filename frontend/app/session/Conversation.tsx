@@ -165,6 +165,19 @@ function Message({
   streaming?: boolean;
 }) {
   const [settled, tail] = streaming ? splitSettledMarkdown(text) : ["", ""];
+  // Parsing Markdown is the costly part of a render, and every delta re-renders
+  // the whole thread. Keep each parse until its own text actually changes.
+  const settledMarkdown = useMemo(
+    () =>
+      settled ? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{settled}</ReactMarkdown>
+      ) : null,
+    [settled],
+  );
+  const fullMarkdown = useMemo(
+    () => <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>,
+    [text],
+  );
   return (
     <article className={`room-message ${mine ? "mine" : ""}`}>
       <span className={`avatar ${mine ? "trainee-avatar" : `role-tone-${index % 4}`}`}>
@@ -178,12 +191,14 @@ function Message({
         <div className="message-bubble markdown-body">
           {streaming ? (
             <>
-              {settled && <ReactMarkdown remarkPlugins={[remarkGfm]}>{settled}</ReactMarkdown>}
-              <StreamingText content={tail} />
+              {settledMarkdown}
+              {/* Remount per paragraph so the first word of a new one fades
+                  in too, instead of reusing the previous paragraph's spans. */}
+              <StreamingText key={settled.length} content={tail} />
               <span className="stream-cursor" aria-hidden="true" />
             </>
           ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            fullMarkdown
           )}
         </div>
         <EvidenceChips ids={citations} evidence={evidence} />

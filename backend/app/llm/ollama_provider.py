@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import TypeVar
 
@@ -25,6 +26,10 @@ from .prompts import (
 
 
 StructuredResponse = TypeVar("StructuredResponse", bound=BaseModel)
+
+# Every request Ollama receives must carry the same options, otherwise the
+# server can reload the model when they differ. Preloading reuses these.
+CHAT_OPTIONS = {"temperature": 0.2}
 
 
 async def list_ollama_models(
@@ -78,6 +83,9 @@ class OllamaLLMProvider:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.client = client
+        # Monotonic time of the last request sent to Ollama, or 0.0 when none
+        # has been sent. Used to decide when the model needs keeping warm.
+        self.last_request_at = 0.0
 
     def _payload(
         self,
@@ -87,6 +95,7 @@ class OllamaLLMProvider:
         *,
         stream: bool,
     ) -> dict:
+        self.last_request_at = time.monotonic()
         return {
             "model": self.model,
             "messages": [
@@ -95,8 +104,34 @@ class OllamaLLMProvider:
             ],
             "format": response_type.model_json_schema(),
             "stream": stream,
-            "options": {"temperature": 0.2},
+            "options": dict(CHAT_OPTIONS),
         }
+
+    async def preload(self) -> None:
+        """Load the model on the server without generating anything.
+
+        A generate request carrying only the model and options loads the model
+        and resets the server's unload timer, returning almost immediately when
+        it is already loaded. keep_alive is omitted so the server's own default
+        applies.
+        """
+        payload = {"model": self.model, "options": dict(CHAT_OPTIONS)}
+        self.last_request_at = time.monotonic()
+        try:
+            if self.client is None:
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    response = await client.post(
+                        f"{self.base_url}/api/generate", json=payload
+                    )
+            else:
+                response = await self.client.post(
+                    f"{self.base_url}/api/generate", json=payload
+                )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise LLMProviderError(
+                f"Could not preload Ollama model {self.model}: {exc}"
+            ) from exc
 
     async def _chat(
         self,
